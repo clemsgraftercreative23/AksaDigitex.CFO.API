@@ -12,12 +12,12 @@ public class AccurateService : IAccurateService
         _client = client;
     }
 
-    public async Task<string> GetDatabaseHost()
+    public async Task<object> GetDatabaseHost()
     {
         return await _client.GetDatabaseHost();
     }
 
-    public async Task<string> GetCoaDetail(string no)
+    public async Task<object> GetCoaDetail(string no)
     {
         return await _client.GetCoaDetail(no);
     }

@@ -3,6 +3,6 @@ namespace MyBackend.Application.Services;
 
 public interface IAccurateService
 {
-    Task<string> GetDatabaseHost();
-    Task<string> GetCoaDetail(string no);
+    Task<object> GetDatabaseHost();
+    Task<object> GetCoaDetail(string no);
 }

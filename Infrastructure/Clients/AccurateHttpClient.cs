@@ -15,7 +15,7 @@ public class AccurateHttpClient
         _config = config;
     }
 
-    public async Task<string> GetDatabaseHost()
+    public async Task<object> GetDatabaseHost()
     {
         var token = _config["Accurate:ApiToken"];
         var signatureKey = _config["Accurate:SignatureKey"];
@@ -30,10 +30,11 @@ public class AccurateHttpClient
         request.Headers.Add("X-Api-Signature", signature);
 
         var response = await _httpClient.SendAsync(request);
-        return await response.Content.ReadAsStringAsync();
+        var jsonString = await response.Content.ReadAsStringAsync();
+        return System.Text.Json.JsonSerializer.Deserialize<object>(jsonString);
     }
 
-    public async Task<string> GetCoaDetail(string no)
+    public async Task<object> GetCoaDetail(string no)
     {
         var token = _config["Accurate:ApiToken"];
         var signatureKey = _config["Accurate:SignatureKey"];
@@ -50,7 +51,8 @@ public class AccurateHttpClient
         request.Headers.Add("X-Api-Signature", signature);
 
         var response = await _httpClient.SendAsync(request);
-        return await response.Content.ReadAsStringAsync();
+        var jsonString = await response.Content.ReadAsStringAsync();
+        return System.Text.Json.JsonSerializer.Deserialize<object>(jsonString);
     }
 
     private string GenerateSignature(string key, string timestamp)
