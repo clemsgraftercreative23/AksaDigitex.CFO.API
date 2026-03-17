@@ -21,4 +21,9 @@ public class AccurateService : IAccurateService
     {
         return await _client.GetCoaDetail(no);
     }
+
+    public async Task<string> GetCoaDetailRaw(string no)
+    {
+        return await _client.GetCoaDetailRaw(no);
+    }
 }

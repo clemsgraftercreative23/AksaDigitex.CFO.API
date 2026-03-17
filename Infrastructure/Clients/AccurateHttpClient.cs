@@ -34,16 +34,21 @@ public class AccurateHttpClient
         return System.Text.Json.JsonSerializer.Deserialize<object>(jsonString);
     }
 
-    public async Task<object> GetCoaDetail(string no)
+    /// <summary>
+    /// Returns raw JSON string from Accurate so the envelope { "s", "d" } and balance are preserved for the frontend.
+    /// </summary>
+    public async Task<string> GetCoaDetailRaw(string no)
     {
         var token = _config["Accurate:ApiToken"];
         var signatureKey = _config["Accurate:SignatureKey"];
         var host = _config["Accurate:Host"];
+        if (string.IsNullOrEmpty(host))
+            throw new InvalidOperationException("Accurate:Host is not configured.");
 
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
         var signature = GenerateSignature(signatureKey, timestamp);
 
-        var url = $"{host}/accurate/api/glaccount/detail.do?no={no}";
+        var url = $"{host}/accurate/api/glaccount/detail.do?no={Uri.EscapeDataString(no)}";
 
         var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Add("Authorization", $"Bearer {token}");
@@ -51,7 +56,12 @@ public class AccurateHttpClient
         request.Headers.Add("X-Api-Signature", signature);
 
         var response = await _httpClient.SendAsync(request);
-        var jsonString = await response.Content.ReadAsStringAsync();
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    public async Task<object> GetCoaDetail(string no)
+    {
+        var jsonString = await GetCoaDetailRaw(no);
         return System.Text.Json.JsonSerializer.Deserialize<object>(jsonString);
     }
 

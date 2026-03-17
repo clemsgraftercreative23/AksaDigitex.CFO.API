@@ -34,9 +34,18 @@ app.MapGet("/api/database-host", async (IAccurateService service) =>
     return await service.GetDatabaseHost();
 });
 
+// Return raw JSON from Accurate so envelope { "s", "d" } and "balance" are preserved (no double-serialize).
 app.MapGet("/api/coa/{no}", async (string no, IAccurateService service) =>
 {
-    return await service.GetCoaDetail(no);
+    try
+    {
+        var rawJson = await service.GetCoaDetailRaw(no);
+        return Results.Content(rawJson, "application/json");
+    }
+    catch (Exception ex)
+    {
+        return Results.Json(new { s = false, d = ex.Message }, statusCode: 500);
+    }
 });
 
 app.Run();
