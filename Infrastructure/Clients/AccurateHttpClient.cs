@@ -52,6 +52,20 @@ public class AccurateHttpClient
         return System.Text.Json.JsonSerializer.Deserialize<object>(jsonString);
     }
 
+    private string GetHost(string? company = null)
+    {
+        if (!string.IsNullOrWhiteSpace(company))
+        {
+            var companyHost = _config[$"Accurate:Companies:{company}:Host"];
+            if (!string.IsNullOrWhiteSpace(companyHost))
+                return companyHost;
+        }
+        var host = _config["Accurate:Host"];
+        if (string.IsNullOrEmpty(host))
+            throw new InvalidOperationException("Accurate:Host is not configured.");
+        return host;
+    }
+
     /// <summary>
     /// Returns raw JSON string from Accurate so the envelope { "s", "d" } and balance are preserved for the frontend.
     /// </summary>
@@ -59,9 +73,7 @@ public class AccurateHttpClient
     {
         var token = GetToken(company);
         var signatureKey = _config["Accurate:SignatureKey"];
-        var host = _config["Accurate:Host"];
-        if (string.IsNullOrEmpty(host))
-            throw new InvalidOperationException("Accurate:Host is not configured.");
+        var host = GetHost(company);
 
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
         var signature = GenerateSignature(signatureKey, timestamp);
@@ -81,6 +93,30 @@ public class AccurateHttpClient
     {
         var jsonString = await GetCoaDetailRaw(no, company);
         return System.Text.Json.JsonSerializer.Deserialize<object>(jsonString);
+    }
+
+    /// <summary>
+    /// Profit &amp; Loss (Laba Rugi) report from Accurate. Returns raw JSON.
+    /// fromDate and toDate in format dd/MM/yyyy (e.g. 01/03/2026).
+    /// </summary>
+    public async Task<string> GetPlAccountAmountRaw(string fromDate, string toDate, string? company = null)
+    {
+        var token = GetToken(company);
+        var signatureKey = _config["Accurate:SignatureKey"];
+        var host = GetHost(company);
+
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+        var signature = GenerateSignature(signatureKey, timestamp);
+
+        var url = $"{host}/accurate/api/glaccount/get-pl-account-amount.do?fromDate={Uri.EscapeDataString(fromDate)}&toDate={Uri.EscapeDataString(toDate)}";
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("Authorization", $"Bearer {token}");
+        request.Headers.Add("X-Api-Timestamp", timestamp);
+        request.Headers.Add("X-Api-Signature", signature);
+
+        var response = await _httpClient.SendAsync(request);
+        return await response.Content.ReadAsStringAsync();
     }
 
     public IReadOnlyList<string> GetCompanyNames()
