@@ -29,17 +29,24 @@ app.UseSwaggerUI();
 
 app.MapGet("/", () => "API Running");
 
-app.MapGet("/api/database-host", async (IAccurateService service) =>
+app.MapGet("/api/companies", (IAccurateService service) =>
 {
-    return await service.GetDatabaseHost();
+    var names = service.GetCompanyNames();
+    return Results.Json(names);
+});
+
+app.MapGet("/api/database-host", async (string? company, IAccurateService service) =>
+{
+    return await service.GetDatabaseHost(company);
 });
 
 // Return raw JSON from Accurate so envelope { "s", "d" } and "balance" are preserved (no double-serialize).
-app.MapGet("/api/coa/{no}", async (string no, IAccurateService service) =>
+// Optional query: ?company=PT%20WONG%20HANG%20BERSAUDARA (nama PT persis seperti di /api/companies)
+app.MapGet("/api/coa/{no}", async (string no, string? company, IAccurateService service) =>
 {
     try
     {
-        var rawJson = await service.GetCoaDetailRaw(no);
+        var rawJson = await service.GetCoaDetailRaw(no, company);
         return Results.Content(rawJson, "application/json");
     }
     catch (Exception ex)

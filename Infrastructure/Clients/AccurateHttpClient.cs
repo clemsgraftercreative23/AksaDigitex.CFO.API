@@ -15,9 +15,27 @@ public class AccurateHttpClient
         _config = config;
     }
 
-    public async Task<object> GetDatabaseHost()
+    private string GetToken(string? company = null)
     {
-        var token = _config["Accurate:ApiToken"];
+        if (!string.IsNullOrWhiteSpace(company))
+        {
+            var companyToken = _config[$"Accurate:Companies:{company}:ApiToken"];
+            if (!string.IsNullOrEmpty(companyToken))
+                return companyToken;
+        }
+        var defaultCompany = _config["Accurate:DefaultCompany"];
+        if (!string.IsNullOrWhiteSpace(defaultCompany))
+        {
+            var defaultToken = _config[$"Accurate:Companies:{defaultCompany}:ApiToken"];
+            if (!string.IsNullOrEmpty(defaultToken))
+                return defaultToken;
+        }
+        return _config["Accurate:ApiToken"] ?? throw new InvalidOperationException("Accurate:ApiToken is not configured.");
+    }
+
+    public async Task<object> GetDatabaseHost(string? company = null)
+    {
+        var token = GetToken(company);
         var signatureKey = _config["Accurate:SignatureKey"];
         var url = $"{_config["Accurate:AccountUrl"]}/api/api-token.do";
 
@@ -37,9 +55,9 @@ public class AccurateHttpClient
     /// <summary>
     /// Returns raw JSON string from Accurate so the envelope { "s", "d" } and balance are preserved for the frontend.
     /// </summary>
-    public async Task<string> GetCoaDetailRaw(string no)
+    public async Task<string> GetCoaDetailRaw(string no, string? company = null)
     {
-        var token = _config["Accurate:ApiToken"];
+        var token = GetToken(company);
         var signatureKey = _config["Accurate:SignatureKey"];
         var host = _config["Accurate:Host"];
         if (string.IsNullOrEmpty(host))
@@ -59,10 +77,18 @@ public class AccurateHttpClient
         return await response.Content.ReadAsStringAsync();
     }
 
-    public async Task<object> GetCoaDetail(string no)
+    public async Task<object> GetCoaDetail(string no, string? company = null)
     {
-        var jsonString = await GetCoaDetailRaw(no);
+        var jsonString = await GetCoaDetailRaw(no, company);
         return System.Text.Json.JsonSerializer.Deserialize<object>(jsonString);
+    }
+
+    public IReadOnlyList<string> GetCompanyNames()
+    {
+        var section = _config.GetSection("Accurate:Companies");
+        if (!section.Exists())
+            return Array.Empty<string>();
+        return section.GetChildren().Select(c => c.Key).ToList();
     }
 
     private string GenerateSignature(string key, string timestamp)

@@ -12,18 +12,23 @@ public class AccurateService : IAccurateService
         _client = client;
     }
 
-    public async Task<object> GetDatabaseHost()
+    public async Task<object> GetDatabaseHost(string? company = null)
     {
-        return await _client.GetDatabaseHost();
+        return await _client.GetDatabaseHost(company);
     }
 
-    public async Task<object> GetCoaDetail(string no)
+    public async Task<object> GetCoaDetail(string no, string? company = null)
     {
-        return await _client.GetCoaDetail(no);
+        return await _client.GetCoaDetail(no, company);
     }
 
-    public async Task<string> GetCoaDetailRaw(string no)
+    public async Task<string> GetCoaDetailRaw(string no, string? company = null)
     {
-        return await _client.GetCoaDetailRaw(no);
+        return await _client.GetCoaDetailRaw(no, company);
+    }
+
+    public IReadOnlyList<string> GetCompanyNames()
+    {
+        return _client.GetCompanyNames();
     }
 }
