@@ -27,7 +27,10 @@ public static class LaporanKeuanganEndpoints
                         if (string.IsNullOrWhiteSpace(companyName)) continue;
                         var rawJson = await service.GetPlAccountAmountRaw(fromDate, toDate, companyName);
                         using var doc = JsonDocument.Parse(rawJson);
-                        var d = doc.RootElement.TryGetProperty("d", out var prop) ? prop : default;
+                        // Clone JsonElement so it can outlive JsonDocument disposal (prevents ObjectDisposedException).
+                        var d = doc.RootElement.TryGetProperty("d", out var prop)
+                            ? prop.Clone()
+                            : JsonDocument.Parse("null").RootElement.Clone();
                         companiesList.Add(new { companyName = companyName.Trim(), data = d });
                     }
 
@@ -63,7 +66,10 @@ public static class LaporanKeuanganEndpoints
                         if (string.IsNullOrWhiteSpace(companyName)) continue;
                         var rawJson = await service.GetBsAccountAmountRaw(asOfDate, companyName);
                         using var doc = JsonDocument.Parse(rawJson);
-                        var d = doc.RootElement.TryGetProperty("d", out var prop) ? prop : default;
+                        // Clone JsonElement so it can outlive JsonDocument disposal (prevents ObjectDisposedException).
+                        var d = doc.RootElement.TryGetProperty("d", out var prop)
+                            ? prop.Clone()
+                            : JsonDocument.Parse("null").RootElement.Clone();
                         companiesList.Add(new { companyName = companyName.Trim(), data = d });
                     }
 
