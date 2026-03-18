@@ -36,4 +36,9 @@ public class AccurateService : IAccurateService
     {
         return await _client.GetPlAccountAmountRaw(fromDate, toDate, company);
     }
+
+    public async Task<string> GetBsAccountAmountRaw(string asOfDate, string? company = null)
+    {
+        return await _client.GetBsAccountAmountRaw(asOfDate, company);
+    }
 }

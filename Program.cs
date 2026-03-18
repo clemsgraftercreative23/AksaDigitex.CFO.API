@@ -91,4 +91,39 @@ app.MapGet("/api/laporan-keuangan/laba-rugi", async (
     }
 });
 
+// Laporan Keuangan - Neraca (Balance Sheet). asOfDate in dd/MM/yyyy.
+// Single: ?company=PT Name → returns { s, d: array }.
+// Multi:  ?company=PT1&company=PT2 → returns { s, companies: [{ companyName, data }] }.
+app.MapGet("/api/laporan-keuangan/neraca", async (
+    string asOfDate,
+    HttpRequest request,
+    IAccurateService service) =>
+{
+    var companyValues = request.Query["company"].ToArray();
+    try
+    {
+        if (companyValues.Length >= 2)
+        {
+            var companiesList = new List<object>();
+            foreach (var companyName in companyValues)
+            {
+                if (string.IsNullOrWhiteSpace(companyName)) continue;
+                var rawJson = await service.GetBsAccountAmountRaw(asOfDate, companyName);
+                var doc = System.Text.Json.JsonDocument.Parse(rawJson);
+                var d = doc.RootElement.TryGetProperty("d", out var prop) ? prop : default;
+                companiesList.Add(new { companyName = companyName.Trim(), data = d });
+            }
+            return Results.Json(new { s = true, companies = companiesList });
+        }
+
+        var singleCompany = companyValues.Length == 1 ? companyValues[0] : null;
+        var json = await service.GetBsAccountAmountRaw(asOfDate, singleCompany);
+        return Results.Content(json, "application/json");
+    }
+    catch (Exception ex)
+    {
+        return Results.Json(new { s = false, d = ex.Message }, statusCode: 500);
+    }
+});
+
 app.Run();
