@@ -33,12 +33,14 @@ app.MapGet("/api/companies", (IAccurateService service) =>
 {
     var names = service.GetCompanyNames();
     return Results.Json(names);
-});
+})
+.WithName("GetCompanies")
+.WithTags("Companies");
 
 app.MapGet("/api/database-host", async (string? company, IAccurateService service) =>
 {
     return await service.GetDatabaseHost(company);
-});
+}).WithTags("Companies");
 
 // Return raw JSON from Accurate so envelope { "s", "d" } and "balance" are preserved (no double-serialize).
 // Optional query: ?company=PT%20WONG%20HANG%20BERSAUDARA (nama PT persis seperti di /api/companies)
@@ -53,7 +55,7 @@ app.MapGet("/api/coa/{no}", async (string no, string? company, IAccurateService 
     {
         return Results.Json(new { s = false, d = ex.Message }, statusCode: 500);
     }
-});
+}).WithTags("COA");
 
 // Laporan Keuangan - Laba Rugi (P&L). fromDate/toDate in dd/MM/yyyy.
 // Single: ?company=PT Name → returns { s, d: array }.
@@ -61,10 +63,10 @@ app.MapGet("/api/coa/{no}", async (string no, string? company, IAccurateService 
 app.MapGet("/api/laporan-keuangan/laba-rugi", async (
     string fromDate,
     string toDate,
-    HttpRequest request,
+    string[]? company,
     IAccurateService service) =>
 {
-    var companyValues = request.Query["company"].ToArray();
+    var companyValues = company ?? Array.Empty<string>();
     try
     {
         if (companyValues.Length >= 2)
@@ -89,6 +91,21 @@ app.MapGet("/api/laporan-keuangan/laba-rugi", async (
     {
         return Results.Json(new { s = false, d = ex.Message }, statusCode: 500);
     }
-});
+}).WithTags("Laporan Keuangan");
+
+
+// Endpoint API buatanmu untuk halaman Sales Order
+app.MapGet("/api/sales-orders", async (AccurateHttpClient accurateClient, string? company) =>
+{
+    try
+    {
+        var result = await accurateClient.GetSalesOrdersRaw(company);
+        return Results.Content(result, "application/json");
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(ex.Message);
+    }
+}).WithTags("Laporan Keuangan");
 
 app.Run();
