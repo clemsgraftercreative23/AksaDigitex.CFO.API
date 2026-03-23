@@ -34,6 +34,40 @@ public class AccurateCompanyKeyResolver : IAccurateCompanyKeyResolver
             }
         }
 
+        // DB company_name often omits legal prefixes (e.g. "WONG HANG…") while Accurate:Companies keys
+        // use full names (e.g. "PT WONG HANG BERSAUDARA"). Match after normalizing prefixes.
+        var n = NormalizeLegalName(trimmed);
+        if (n.Length > 0)
+        {
+            foreach (var key in accurateCompanyKeys)
+            {
+                if (string.Equals(NormalizeLegalName(key), n, StringComparison.OrdinalIgnoreCase))
+                    return key;
+            }
+        }
+
         return null;
+    }
+
+    /// <summary>Strips common Indonesian entity prefixes so DB names align with Accurate config keys.</summary>
+    private static string NormalizeLegalName(string s)
+    {
+        var t = s.Trim();
+        var prefixes = new[]
+        {
+            "PT. ", "PT ", "CV. ", "CV ", "UD. ", "UD ", "PD. ", "PD ", "FIRMA ", "YAYASAN ",
+        };
+        foreach (var p in prefixes)
+        {
+            if (t.StartsWith(p, StringComparison.OrdinalIgnoreCase))
+            {
+                t = t[p.Length..].Trim();
+                break;
+            }
+        }
+
+        while (t.Contains("  ", StringComparison.Ordinal))
+            t = t.Replace("  ", " ", StringComparison.Ordinal);
+        return t;
     }
 }
