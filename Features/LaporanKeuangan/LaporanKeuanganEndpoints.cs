@@ -6,6 +6,17 @@ namespace MyBackend.Features.LaporanKeuangan;
 
 public static class LaporanKeuanganEndpoints
 {
+    /// <summary>
+    /// Registers Laporan Keuangan API routes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// GET <c>/api/laporan-keuangan/laba-rugi</c>: when two or more companies are authorized,
+    /// the response is <c>{ s: true, companies: [ { companyName, data }, ... ] }</c>.
+    /// Each <c>data</c> is an independent Accurate P&amp;L account tree; clients must not merge
+    /// detail rows across entities by account number alone.
+    /// </para>
+    /// </remarks>
     public static IEndpointRouteBuilder MapLaporanKeuanganEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/laporan-keuangan/laba-rugi", async (
