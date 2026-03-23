@@ -25,18 +25,18 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
-    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    // Swashbuckle v10: OpenApiSecuritySchemeReference must be (schemeId, document) or Swagger UI omits Authorization.
+    c.AddSecurityDefinition("bearer", new OpenApiSecurityScheme
     {
-        Name = "Authorization",
         Type = SecuritySchemeType.Http,
         Scheme = "bearer",
         BearerFormat = "JWT",
-        In = ParameterLocation.Header,
-        Description = "JWT Authorization header using the Bearer scheme.",
+        Description =
+            "JWT dari POST /api/auth/login (field accessToken). Tempel hanya string JWT-nya — tanpa kata \"Bearer\" (Swagger menambahkannya).",
     });
     c.AddSecurityRequirement(document => new OpenApiSecurityRequirement
     {
-        [new OpenApiSecuritySchemeReference("Bearer")] = [],
+        [new OpenApiSecuritySchemeReference("bearer", document)] = [],
     });
 });
 
