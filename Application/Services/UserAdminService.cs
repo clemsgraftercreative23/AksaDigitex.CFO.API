@@ -19,11 +19,36 @@ public class UserAdminService : IUserAdminService
         _passwordHasher = passwordHasher;
     }
 
-    public async Task<IReadOnlyList<UserListItemDto>> ListAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<UserListItemDto>> ListAsync(
+        int? companyId = null,
+        int? departmentId = null,
+        bool? isActive = null,
+        string? search = null,
+        CancellationToken cancellationToken = default)
     {
-        return await _db.Users
+        var query = _db.Users
             .AsNoTracking()
             .Include(u => u.Role)
+            .AsQueryable();
+
+        if (companyId.HasValue)
+            query = query.Where(u => u.CompanyId == companyId.Value);
+
+        if (departmentId.HasValue)
+            query = query.Where(u => u.DepartmentId == departmentId.Value);
+
+        if (isActive.HasValue)
+            query = query.Where(u => u.IsActive == isActive.Value);
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var term = search.Trim().ToLowerInvariant();
+            query = query.Where(u =>
+                u.Email.ToLower().Contains(term) ||
+                u.FullName.ToLower().Contains(term));
+        }
+
+        return await query
             .OrderBy(u => u.Id)
             .Select(u => new UserListItemDto
             {
