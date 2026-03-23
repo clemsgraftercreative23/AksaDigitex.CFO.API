@@ -12,8 +12,16 @@ public static class UsersEndpoints
             .RequireAuthorization(AuthConstants.SuperDuperAdminPolicy)
             .WithTags("Users");
 
-        admin.MapGet("/", async (IUserAdminService users, CancellationToken cancellationToken) =>
-            Results.Json(await users.ListAsync(cancellationToken)));
+        admin.MapGet(
+            "/",
+            async (
+                int? companyId,
+                int? departmentId,
+                bool? isActive,
+                string? search,
+                IUserAdminService users,
+                CancellationToken cancellationToken) =>
+                Results.Json(await users.ListAsync(companyId, departmentId, isActive, search, cancellationToken)));
 
         admin.MapGet("/{id:int}", async Task<IResult> (int id, IUserAdminService users, CancellationToken cancellationToken) =>
         {

@@ -5,7 +5,12 @@ namespace MyBackend.Application.Services;
 
 public interface IUserAdminService
 {
-    Task<IReadOnlyList<UserListItemDto>> ListAsync(CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<UserListItemDto>> ListAsync(
+        int? companyId = null,
+        int? departmentId = null,
+        bool? isActive = null,
+        string? search = null,
+        CancellationToken cancellationToken = default);
     Task<UserDetailDto?> GetByIdAsync(int id, CancellationToken cancellationToken = default);
     Task<(bool ok, int statusCode, string? error, UserDetailDto? user)> CreateAsync(CreateUserRequest request, CancellationToken cancellationToken = default);
     Task<(bool ok, int statusCode, string? error, UserDetailDto? user)> UpdateAsync(int id, UpdateUserRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken = default);
