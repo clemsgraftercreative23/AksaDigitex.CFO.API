@@ -33,6 +33,10 @@ public class CompanyAccessService : ICompanyAccessService
         if (accurateKeys.Count == 0)
             return Array.Empty<string>();
 
+        // Super admin must see every entity under Accurate:Companies — not only rows that exist in CFO DB.
+        if (user.IsInRole(AuthConstants.SuperDuperAdminRole))
+            return accurateKeys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+
         var isAll = IsAllCompany(user);
 
         if (isAll)
