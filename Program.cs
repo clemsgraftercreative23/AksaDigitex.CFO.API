@@ -15,6 +15,7 @@ using MyBackend.Features.LaporanKeuangan;
 using MyBackend.Features.Lookup;
 using MyBackend.Features.Root;
 using MyBackend.Features.SalesOrders;
+using MyBackend.Features.UtangPiutang;
 using MyBackend.Features.Users;
 using MyBackend.Infrastructure.Clients;
 using MyBackend.Infrastructure.Persistence;
@@ -147,6 +148,7 @@ app.MapUsersEndpoints();
 app.MapLookupEndpoints();
 app.MapCompaniesEndpoints();
 app.MapCoaEndpoints();
+app.MapUtangPiutangEndpoints();
 app.MapLaporanKeuanganEndpoints();
 app.MapSalesOrdersEndpoints();
 

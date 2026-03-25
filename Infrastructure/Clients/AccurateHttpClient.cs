@@ -205,4 +205,59 @@ public class AccurateHttpClient
 
         return responseBody;
     }
+
+    /// <summary>
+    /// Daftar penjualan faktur (id) untuk proses detail per baris.
+    /// </summary>
+    public async Task<string> GetSalesInvoiceListRaw(string? company = null)
+    {
+        var token = GetToken(company);
+        var signatureKey = _config["Accurate:SignatureKey"];
+        var host = GetHost(company);
+
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+        var signature = GenerateSignature(signatureKey, timestamp);
+
+        var url = $"{host}/accurate/api/sales-invoice/list.do?fields=id";
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("Authorization", $"Bearer {token}");
+        request.Headers.Add("X-Api-Timestamp", timestamp);
+        request.Headers.Add("X-Api-Signature", signature);
+
+        var response = await _httpClient.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+        _logger.LogInformation(
+            "[Accurate] GetSalesInvoiceListRaw company={Company} status={Status}",
+            company ?? "(default)",
+            response.StatusCode);
+        if (!response.IsSuccessStatusCode)
+            _logger.LogWarning(
+                "[Accurate] GetSalesInvoiceListRaw body preview: {Preview}",
+                body.Length > 400 ? body[..400] : body);
+        return body;
+    }
+
+    /// <summary>
+    /// Detail satu faktur penjualan (customer, totalAmount, statusName, transDate, dll.).
+    /// </summary>
+    public async Task<string> GetSalesInvoiceDetailRaw(string id, string? company = null)
+    {
+        var token = GetToken(company);
+        var signatureKey = _config["Accurate:SignatureKey"];
+        var host = GetHost(company);
+
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+        var signature = GenerateSignature(signatureKey, timestamp);
+
+        var url = $"{host}/accurate/api/sales-invoice/detail.do?id={Uri.EscapeDataString(id)}";
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("Authorization", $"Bearer {token}");
+        request.Headers.Add("X-Api-Timestamp", timestamp);
+        request.Headers.Add("X-Api-Signature", signature);
+
+        var response = await _httpClient.SendAsync(request);
+        return await response.Content.ReadAsStringAsync();
+    }
 }
