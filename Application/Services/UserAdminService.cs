@@ -97,6 +97,15 @@ public class UserAdminService : IUserAdminService
         if (role == null)
             return (false, 400, "Unknown role.", null);
 
+        // Required fields rule for user admin:
+        // - DepartmentId must always be set.
+        // - CompanyId must be set when IsAllCompany is false.
+        if (request.DepartmentId == null)
+            return (false, 400, "Department is required.", null);
+
+        if (!request.IsAllCompany && request.CompanyId == null)
+            return (false, 400, "Company is required.", null);
+
         if (request.CompanyId is { } cid)
         {
             var companyOk = await _db.Companies.AnyAsync(c => c.Id == cid, cancellationToken);
@@ -159,14 +168,11 @@ public class UserAdminService : IUserAdminService
             user.FullName = request.FullName.Trim();
         if (request.Position != null)
             user.Position = string.IsNullOrWhiteSpace(request.Position) ? null : request.Position.Trim();
-        if (request.CompanyId.HasValue)
-        {
-            var cid = request.CompanyId.Value;
-            var companyOk = await _db.Companies.AnyAsync(c => c.Id == cid, cancellationToken);
-            if (!companyOk)
-                return (false, 400, "Unknown company id.", null);
-            user.CompanyId = cid;
-        }
+
+        // Enforce required fields on update:
+        // - DepartmentId must always be set (either supplied in request or already present on user).
+        // - CompanyId must be set when effective IsAllCompany is false.
+        var effectiveIsAllCompany = request.IsAllCompany ?? user.IsAllCompany;
 
         if (request.DepartmentId.HasValue)
         {
@@ -175,6 +181,38 @@ public class UserAdminService : IUserAdminService
             if (!deptOk)
                 return (false, 400, "Unknown department id.", null);
             user.DepartmentId = did;
+        }
+        else if (user.DepartmentId == null)
+        {
+            return (false, 400, "Department is required.", null);
+        }
+
+        if (effectiveIsAllCompany == false)
+        {
+            if (request.CompanyId.HasValue)
+            {
+                var cid = request.CompanyId.Value;
+                var companyOk = await _db.Companies.AnyAsync(c => c.Id == cid, cancellationToken);
+                if (!companyOk)
+                    return (false, 400, "Unknown company id.", null);
+                user.CompanyId = cid;
+            }
+            else if (user.CompanyId == null)
+            {
+                return (false, 400, "Company is required.", null);
+            }
+        }
+        else
+        {
+            // Access-all: companyId is optional, but if provided we still validate.
+            if (request.CompanyId.HasValue)
+            {
+                var cid = request.CompanyId.Value;
+                var companyOk = await _db.Companies.AnyAsync(c => c.Id == cid, cancellationToken);
+                if (!companyOk)
+                    return (false, 400, "Unknown company id.", null);
+                user.CompanyId = cid;
+            }
         }
 
         if (request.IsActive.HasValue)
