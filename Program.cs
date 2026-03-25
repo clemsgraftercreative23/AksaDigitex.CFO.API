@@ -105,35 +105,18 @@ builder.Services.AddSingleton<IAccurateCompanyKeyResolver, AccurateCompanyKeyRes
 builder.Services.AddScoped<ICompanyAccessService, CompanyAccessService>();
 builder.Services.AddScoped<IUserAdminService, UserAdminService>();
 
-var corsSection = builder.Configuration.GetSection(CorsOptions.SectionName).Get<CorsOptions>();
-var origins = corsSection?.AllowedOrigins?
-    .Where(o => !string.IsNullOrWhiteSpace(o))
-    .Select(o => o.TrimEnd('/'))
-    .ToArray() ?? Array.Empty<string>();
-
-if (origins.Length > 0)
+builder.Services.AddCors(options =>
 {
-    builder.Services.AddCors(opt =>
-    {
-        opt.AddPolicy("Configured", policy =>
-            policy.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod());
-    });
-}
-else
-{
-    builder.Services.AddCors(options =>
-    {
-        options.AddPolicy("AllowAll", policy =>
-            policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
-    });
-}
+    options.AddPolicy("AllowAll", policy =>
+        policy
+            .AllowAnyOrigin()
+            .AllowAnyHeader()
+            .AllowAnyMethod());
+});
 
 var app = builder.Build();
 
-if (origins.Length > 0)
-    app.UseCors("Configured");
-else
-    app.UseCors("AllowAll");
+app.UseCors("AllowAll");
 
 app.UseRateLimiter();
 app.UseAuthentication();
