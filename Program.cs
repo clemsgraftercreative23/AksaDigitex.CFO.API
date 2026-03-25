@@ -13,6 +13,7 @@ using MyBackend.Features.Coa;
 using MyBackend.Features.Companies;
 using MyBackend.Features.LaporanKeuangan;
 using MyBackend.Features.Lookup;
+using MyBackend.Features.Entitas;
 using MyBackend.Features.Root;
 using MyBackend.Features.SalesOrders;
 using MyBackend.Features.UtangPiutang;
@@ -50,7 +51,13 @@ if (string.IsNullOrWhiteSpace(connectionString))
 }
 
 builder.Services.AddDbContext<CfoDbContext>(options =>
-    options.UseNpgsql(connectionString));
+    options.UseNpgsql(connectionString, npgsqlOptions =>
+        // Mitigasi kasus koneksi diputus paksa (transient) saat baca dari DB.
+        // Npgsql/EF akan retry beberapa kali sebelum gagal.
+        npgsqlOptions.EnableRetryOnFailure(
+            maxRetryCount: 5,
+            maxRetryDelay: TimeSpan.FromSeconds(10),
+            errorCodesToAdd: null)));
 
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
 builder.Services.Configure<CorsOptions>(builder.Configuration.GetSection(CorsOptions.SectionName));
@@ -132,6 +139,7 @@ app.MapLookupEndpoints();
 app.MapCompaniesEndpoints();
 app.MapCoaEndpoints();
 app.MapUtangPiutangEndpoints();
+app.MapEntitasEndpoints();
 app.MapLaporanKeuanganEndpoints();
 app.MapSalesOrdersEndpoints();
 

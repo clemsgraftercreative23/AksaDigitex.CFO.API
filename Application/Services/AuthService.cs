@@ -1,8 +1,12 @@
+using System.IO;
+using System.Net.Sockets;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Npgsql;
 using MyBackend.Application.Options;
 using MyBackend.Features.Auth;
 using MyBackend.Infrastructure.Persistence;
+using MyBackend.Infrastructure.Persistence.Entities;
 using MyBackend.Infrastructure.Security;
 
 namespace MyBackend.Application.Services;
@@ -32,9 +36,27 @@ public class AuthService : IAuthService
         if (string.IsNullOrEmpty(email))
             return null;
 
-        var user = await _db.Users
-            .Include(u => u.Role)
-            .FirstOrDefaultAsync(u => u.Email.ToLower() == email.ToLower(), cancellationToken);
+        UserEntity? user;
+        try
+        {
+            user = await _db.Users
+                .Include(u => u.Role)
+                .FirstOrDefaultAsync(u => u.Email.ToLower() == email.ToLower(), cancellationToken);
+        }
+        catch (NpgsqlException ex) when (IsTransientConnectionClosed(ex))
+        {
+            // Jika koneksi DB putus paksa (transient), jangan biarkan request jadi 500.
+            // Anggap login gagal (endpoint akan balas 401).
+            return null;
+        }
+        catch (Microsoft.EntityFrameworkCore.Storage.RetryLimitExceededException ex)
+        {
+            // EnableRetryOnFailure kita bisa menghasilkan exception wrapper setelah retry habis.
+            if (ex.InnerException is NpgsqlException npg && IsTransientConnectionClosed(npg))
+                return null;
+
+            throw;
+        }
 
         if (user == null || !user.IsActive || user.Role == null)
             return null;
@@ -54,5 +76,29 @@ public class AuthService : IAuthService
             TokenType = "Bearer",
             User = UserSummaryDto.FromEntity(user, user.Role.RoleName),
         };
+    }
+
+    private static bool IsTransientConnectionClosed(Exception ex)
+    {
+        // kasus seperti: "Unable to read data... forcibly closed by the remote host."
+        if (ex.Message.Contains("forcibly closed", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var se = FindInner<SocketException>(ex);
+        if (se != null && se.NativeErrorCode == 10054) // WSAECONNRESET
+            return true;
+
+        return FindInner<IOException>(ex) != null;
+    }
+
+    private static T? FindInner<T>(Exception ex) where T : Exception
+    {
+        while (ex != null)
+        {
+            if (ex is T t) return t;
+            ex = ex.InnerException!;
+        }
+
+        return default;
     }
 }
