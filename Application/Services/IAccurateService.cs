@@ -13,4 +13,9 @@ public interface IAccurateService
     Task<string> GetPlAccountAmountRaw(string fromDate, string toDate, string? company = null);
     /// <summary>Neraca (Balance Sheet) report. asOfDate in dd/MM/yyyy. Returns raw JSON from Accurate.</summary>
     Task<string> GetBsAccountAmountRaw(string asOfDate, string? company = null);
+    Task<string> GetSalesReceiptListRaw(string? company = null);
+    Task<string> GetSalesReceiptDetailRaw(string id, string? company = null);
+    Task<string> GetPurchaseInvoiceListRaw(string? company = null);
+    Task<string> GetPurchaseInvoiceDetailRaw(string id, string? company = null);
+    Task<string> GetVendorDetailRaw(string id, string? company = null);
 }

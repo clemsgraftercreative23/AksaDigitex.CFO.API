@@ -41,4 +41,29 @@ public class AccurateService : IAccurateService
     {
         return await _client.GetBsAccountAmountRaw(asOfDate, company);
     }
+
+    public async Task<string> GetSalesReceiptListRaw(string? company = null)
+    {
+        return await _client.GetSalesReceiptListRaw(company);
+    }
+
+    public async Task<string> GetSalesReceiptDetailRaw(string id, string? company = null)
+    {
+        return await _client.GetSalesReceiptDetailRaw(id, company);
+    }
+
+    public async Task<string> GetPurchaseInvoiceListRaw(string? company = null)
+    {
+        return await _client.GetPurchaseInvoiceListRaw(company);
+    }
+
+    public async Task<string> GetPurchaseInvoiceDetailRaw(string id, string? company = null)
+    {
+        return await _client.GetPurchaseInvoiceDetailRaw(id, company);
+    }
+
+    public async Task<string> GetVendorDetailRaw(string id, string? company = null)
+    {
+        return await _client.GetVendorDetailRaw(id, company);
+    }
 }

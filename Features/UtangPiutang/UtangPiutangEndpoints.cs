@@ -134,6 +134,74 @@ public static class UtangPiutangEndpoints
             .RequireAuthorization()
             .WithTags("Utang Piutang");
 
+        app.MapGet("/api/utang-piutang/ap-aging", async (
+                ClaimsPrincipal user,
+                string asOfDate,
+                string[]? company,
+                IAccurateService service,
+                ICompanyAccessService access,
+                CancellationToken cancellationToken) =>
+            {
+                if (!DateOnly.TryParse(asOfDate, CultureInfo.InvariantCulture, DateTimeStyles.None, out var asOf))
+                    return Results.Json(new { error = "Invalid asOfDate; use yyyy-MM-dd" }, statusCode: 400);
+
+                var companyValues = company ?? Array.Empty<string>();
+                var accessResult = await access.NormalizeAndAuthorizeAsync(
+                    user,
+                    companyValues,
+                    cancellationToken);
+                if (!accessResult.Success)
+                    return Results.Json(new { error = accessResult.Error }, statusCode: accessResult.StatusCode);
+
+                var keys = accessResult.AccurateCompanyKeys;
+                try
+                {
+                    var vendors = new List<object>();
+                    foreach (var key in keys)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var rows = await ApAgingComputation.ComputeForCompany(
+                            key,
+                            asOf,
+                            service,
+                            cancellationToken);
+                        foreach (var r in rows)
+                        {
+                            vendors.Add(new
+                            {
+                                company = r.Company,
+                                vendorId = r.VendorId,
+                                vendorName = r.VendorName,
+                                outstanding = r.Outstanding,
+                                bucket0_30 = r.Bucket0_30,
+                                bucket31_60 = r.Bucket31_60,
+                                bucket61_90 = r.Bucket61_90,
+                                bucketOver90 = r.BucketOver90,
+                                status = r.Status,
+                            });
+                        }
+                    }
+
+                    return Results.Json(new
+                    {
+                        s = true,
+                        asOfDate = asOf.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                        companyScope = keys,
+                        vendors,
+                    });
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    return Results.Json(new { s = false, d = ex.Message }, statusCode: 500);
+                }
+            })
+            .RequireAuthorization()
+            .WithTags("Utang Piutang");
+
         return app;
     }
 

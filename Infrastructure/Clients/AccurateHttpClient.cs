@@ -260,4 +260,114 @@ public class AccurateHttpClient
         var response = await _httpClient.SendAsync(request);
         return await response.Content.ReadAsStringAsync();
     }
+
+    /// <summary>
+    /// Daftar sales receipt (cash in) untuk diproses detail.
+    /// </summary>
+    public async Task<string> GetSalesReceiptListRaw(string? company = null)
+    {
+        var token = GetToken(company);
+        var signatureKey = _config["Accurate:SignatureKey"];
+        var host = GetHost(company);
+
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+        var signature = GenerateSignature(signatureKey, timestamp);
+        var url = $"{host}/accurate/api/sales-receipt/list.do?fields=id";
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("Authorization", $"Bearer {token}");
+        request.Headers.Add("X-Api-Timestamp", timestamp);
+        request.Headers.Add("X-Api-Signature", signature);
+
+        var response = await _httpClient.SendAsync(request);
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    /// <summary>
+    /// Detail sales receipt, ambil paymentAmount/transDate/status.
+    /// </summary>
+    public async Task<string> GetSalesReceiptDetailRaw(string id, string? company = null)
+    {
+        var token = GetToken(company);
+        var signatureKey = _config["Accurate:SignatureKey"];
+        var host = GetHost(company);
+
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+        var signature = GenerateSignature(signatureKey, timestamp);
+        var url = $"{host}/accurate/api/sales-receipt/detail.do?id={Uri.EscapeDataString(id)}";
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("Authorization", $"Bearer {token}");
+        request.Headers.Add("X-Api-Timestamp", timestamp);
+        request.Headers.Add("X-Api-Signature", signature);
+
+        var response = await _httpClient.SendAsync(request);
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    /// <summary>
+    /// Daftar purchase invoice (cash out) untuk diproses detail.
+    /// </summary>
+    public async Task<string> GetPurchaseInvoiceListRaw(string? company = null)
+    {
+        var token = GetToken(company);
+        var signatureKey = _config["Accurate:SignatureKey"];
+        var host = GetHost(company);
+
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+        var signature = GenerateSignature(signatureKey, timestamp);
+        var url = $"{host}/accurate/api/purchase-invoice/list.do?fields=id";
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("Authorization", $"Bearer {token}");
+        request.Headers.Add("X-Api-Timestamp", timestamp);
+        request.Headers.Add("X-Api-Signature", signature);
+
+        var response = await _httpClient.SendAsync(request);
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    /// <summary>
+    /// Detail purchase invoice, ambil purchaseAmount/transDate/statusOutstanding.
+    /// </summary>
+    public async Task<string> GetPurchaseInvoiceDetailRaw(string id, string? company = null)
+    {
+        var token = GetToken(company);
+        var signatureKey = _config["Accurate:SignatureKey"];
+        var host = GetHost(company);
+
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+        var signature = GenerateSignature(signatureKey, timestamp);
+        var url = $"{host}/accurate/api/purchase-invoice/detail.do?id={Uri.EscapeDataString(id)}";
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("Authorization", $"Bearer {token}");
+        request.Headers.Add("X-Api-Timestamp", timestamp);
+        request.Headers.Add("X-Api-Signature", signature);
+
+        var response = await _httpClient.SendAsync(request);
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    /// <summary>
+    /// Detail vendor berdasarkan id.
+    /// </summary>
+    public async Task<string> GetVendorDetailRaw(string id, string? company = null)
+    {
+        var token = GetToken(company);
+        var signatureKey = _config["Accurate:SignatureKey"];
+        var host = GetHost(company);
+
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+        var signature = GenerateSignature(signatureKey, timestamp);
+        var url = $"{host}/accurate/api/vendor/detail.do?id={Uri.EscapeDataString(id)}";
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("Authorization", $"Bearer {token}");
+        request.Headers.Add("X-Api-Timestamp", timestamp);
+        request.Headers.Add("X-Api-Signature", signature);
+
+        var response = await _httpClient.SendAsync(request);
+        return await response.Content.ReadAsStringAsync();
+    }
 }

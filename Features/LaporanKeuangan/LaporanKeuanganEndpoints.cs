@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Json;
 using MyBackend.Application.Services;
+using System.Globalization;
 
 namespace MyBackend.Features.LaporanKeuangan;
 
@@ -105,6 +106,71 @@ public static class LaporanKeuanganEndpoints
                 var singleCompany = keys.Count == 1 ? keys[0] : null;
                 var json = await service.GetBsAccountAmountRaw(asOfDate, singleCompany);
                 return Results.Content(json, "application/json");
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { s = false, d = ex.Message }, statusCode: 500);
+            }
+        })
+            .RequireAuthorization()
+            .WithTags("Laporan Keuangan");
+
+        app.MapGet("/api/laporan-keuangan/arus-kas", async (
+            ClaimsPrincipal user,
+            string fromDate,
+            string toDate,
+            string[]? company,
+            IAccurateService service,
+            ICompanyAccessService access,
+            CancellationToken cancellationToken) =>
+        {
+            if (!DateOnly.TryParseExact(fromDate, "dd/MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var from))
+                return Results.Json(new { s = false, d = "Invalid fromDate; use dd/MM/yyyy" }, statusCode: 400);
+            if (!DateOnly.TryParseExact(toDate, "dd/MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var to))
+                return Results.Json(new { s = false, d = "Invalid toDate; use dd/MM/yyyy" }, statusCode: 400);
+            if (from > to)
+                return Results.Json(new { s = false, d = "fromDate must be <= toDate" }, statusCode: 400);
+
+            var companyValues = company ?? Array.Empty<string>();
+            var accessResult = await access.NormalizeAndAuthorizeAsync(
+                user,
+                companyValues,
+                cancellationToken);
+            if (!accessResult.Success)
+                return Results.Json(new { error = accessResult.Error }, statusCode: accessResult.StatusCode);
+
+            var keys = accessResult.AccurateCompanyKeys;
+            try
+            {
+                var result = await CashFlowComputation.ComputeAsync(
+                    keys,
+                    from,
+                    to,
+                    service,
+                    cancellationToken);
+
+                return Results.Json(new
+                {
+                    s = true,
+                    fromDate = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    toDate = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    companyScope = keys,
+                    totalCashIn = result.TotalCashIn,
+                    totalCashOut = result.TotalCashOut,
+                    netCashFlow = result.NetCashFlow,
+                    months = result.Rows.Select(r => new
+                    {
+                        month = r.Month,
+                        cashIn = r.CashIn,
+                        cashOut = r.CashOut,
+                        net = r.Net,
+                        cumulative = r.Cumulative,
+                    }),
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
