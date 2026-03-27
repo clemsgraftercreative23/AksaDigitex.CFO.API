@@ -10,6 +10,8 @@ namespace MyBackend.Features.LaporanKeuangan;
 
 public static class LaporanKeuanganEndpoints
 {
+    private static readonly string[] DashboardOverviewCoaNos = ["4101", "1103", "2101", "2102", "2103", "5100", "6100", "6200", "6300"];
+
     private sealed record LabaRugiPdfRow(
         string AccountNo,
         string AccountName,
@@ -364,6 +366,7 @@ public static class LaporanKeuanganEndpoints
             string fromDate,
             string toDate,
             string[]? company,
+            int? maxIds,
             bool? debug,
             IAccurateService service,
             ICompanyAccessService access,
@@ -392,7 +395,8 @@ public static class LaporanKeuanganEndpoints
                     from,
                     to,
                     service,
-                    cancellationToken);
+                    cancellationToken,
+                    maxIds);
 
                 return Results.Json(new
                 {
@@ -425,6 +429,232 @@ public static class LaporanKeuanganEndpoints
             .RequireAuthorization()
             .WithTags("Laporan Keuangan");
 
+        app.MapGet("/api/dashboard/arus-kas-proyeksi", async (
+            ClaimsPrincipal user,
+            string asOfDate,
+            string[]? company,
+            IAccurateService service,
+            ICompanyAccessService access,
+            CancellationToken cancellationToken) =>
+        {
+            if (!DateOnly.TryParseExact(asOfDate, "dd/MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var asOf))
+                return Results.Json(new { s = false, d = "Invalid asOfDate; use dd/MM/yyyy" }, statusCode: 400);
+
+            var companyValues = company ?? Array.Empty<string>();
+            var accessResult = await access.NormalizeAndAuthorizeAsync(
+                user,
+                companyValues,
+                cancellationToken);
+            if (!accessResult.Success)
+                return Results.Json(new { error = accessResult.Error }, statusCode: accessResult.StatusCode);
+
+            var keys = accessResult.AccurateCompanyKeys;
+            try
+            {
+                var from = new DateOnly(asOf.Year, asOf.Month, 1).AddMonths(-5);
+                var result = await CashFlowComputation.ComputeAsync(
+                    keys,
+                    from,
+                    asOf,
+                    service,
+                    cancellationToken,
+                    maxIdsPerCompany: 1200);
+
+                var actualRows = result.Rows
+                    .OrderBy(r => r.Month, StringComparer.Ordinal)
+                    .ToList();
+
+                if (actualRows.Count == 0)
+                {
+                    return Results.Json(new
+                    {
+                        s = true,
+                        asOfDate = asOf.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                        companyScope = keys,
+                        points = Array.Empty<object>(),
+                        projectedBalance = 0m,
+                    });
+                }
+
+                var baseRows = actualRows.Skip(Math.Max(0, actualRows.Count - 3)).ToList();
+                decimal avgInDelta = 0m;
+                decimal avgOutDelta = 0m;
+                if (baseRows.Count >= 2)
+                {
+                    decimal sumInDelta = 0m;
+                    decimal sumOutDelta = 0m;
+                    for (var i = 1; i < baseRows.Count; i++)
+                    {
+                        sumInDelta += baseRows[i].CashIn - baseRows[i - 1].CashIn;
+                        sumOutDelta += baseRows[i].CashOut - baseRows[i - 1].CashOut;
+                    }
+                    avgInDelta = sumInDelta / (baseRows.Count - 1);
+                    avgOutDelta = sumOutDelta / (baseRows.Count - 1);
+                }
+
+                var last = actualRows[^1];
+                var prevIn = last.CashIn;
+                var prevOut = last.CashOut;
+                var prevCumulative = last.Cumulative;
+                var projectedRows = new List<CashFlowMonthlyRow>(capacity: 3);
+
+                for (var step = 1; step <= 3; step++)
+                {
+                    var dt = DateOnly.ParseExact(last.Month + "-01", "yyyy-MM-dd", CultureInfo.InvariantCulture).AddMonths(step);
+                    var month = dt.ToString("yyyy-MM", CultureInfo.InvariantCulture);
+                    var cashIn = Math.Max(0m, Math.Round(prevIn + avgInDelta, 0));
+                    var cashOut = Math.Max(0m, Math.Round(prevOut + avgOutDelta, 0));
+                    var net = cashIn - cashOut;
+                    var cumulative = prevCumulative + net;
+                    projectedRows.Add(new CashFlowMonthlyRow(month, cashIn, cashOut, net, cumulative));
+                    prevIn = cashIn;
+                    prevOut = cashOut;
+                    prevCumulative = cumulative;
+                }
+
+                var points = actualRows
+                    .Select(r => new
+                    {
+                        month = r.Month,
+                        cashIn = r.CashIn,
+                        cashOut = r.CashOut,
+                        net = r.Net,
+                        cumulative = r.Cumulative,
+                        isProjected = false,
+                    })
+                    .Concat(projectedRows.Select(r => new
+                    {
+                        month = r.Month,
+                        cashIn = r.CashIn,
+                        cashOut = r.CashOut,
+                        net = r.Net,
+                        cumulative = r.Cumulative,
+                        isProjected = true,
+                    }))
+                    .ToList();
+
+                return Results.Json(new
+                {
+                    s = true,
+                    asOfDate = asOf.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    companyScope = keys,
+                    points,
+                    projectedBalance = points.Count > 0 ? points[^1].cumulative : 0m,
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { s = false, d = ex.Message }, statusCode: 500);
+            }
+        })
+            .RequireAuthorization()
+            .WithTags("Dashboard");
+
+        app.MapGet("/api/dashboard/overview-cards", async (
+            ClaimsPrincipal user,
+            string[]? company,
+            IAccurateService service,
+            ICompanyAccessService access,
+            CancellationToken cancellationToken) =>
+        {
+            var companyValues = company ?? Array.Empty<string>();
+            var accessResult = await access.NormalizeAndAuthorizeAsync(
+                user,
+                companyValues,
+                cancellationToken);
+            if (!accessResult.Success)
+                return Results.Json(new { error = accessResult.Error }, statusCode: accessResult.StatusCode);
+
+            var keys = accessResult.AccurateCompanyKeys;
+            decimal totalPendapatan = 0m;
+            decimal totalPiutang = 0m;
+            decimal totalHutang = 0m;
+            decimal totalBeban = 0m;
+            var gate = new object();
+
+            try
+            {
+                await Parallel.ForEachAsync(
+                    keys,
+                    new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = cancellationToken },
+                    async (companyName, token) =>
+                    {
+                        decimal pendapatan = 0m;
+                        decimal piutang = 0m;
+                        decimal hutang = 0m;
+                        decimal beban = 0m;
+
+                        foreach (var coaNo in DashboardOverviewCoaNos)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            string raw;
+                            try
+                            {
+                                raw = await service.GetCoaDetailRaw(coaNo, companyName);
+                            }
+                            catch
+                            {
+                                continue;
+                            }
+
+                            var balance = TryParseCoaBalance(raw);
+                            switch (coaNo)
+                            {
+                                case "4101":
+                                    pendapatan += balance;
+                                    break;
+                                case "1103":
+                                    piutang += balance;
+                                    break;
+                                case "2101":
+                                case "2102":
+                                case "2103":
+                                    hutang += balance;
+                                    break;
+                                case "5100":
+                                case "6100":
+                                case "6200":
+                                case "6300":
+                                    beban += balance;
+                                    break;
+                            }
+                        }
+
+                        lock (gate)
+                        {
+                            totalPendapatan += pendapatan;
+                            totalPiutang += piutang;
+                            totalHutang += hutang;
+                            totalBeban += beban;
+                        }
+                    });
+
+                return Results.Json(new
+                {
+                    s = true,
+                    companyScope = keys,
+                    totalPendapatan,
+                    totalPiutang,
+                    totalHutang,
+                    labaBersih = totalPendapatan - totalBeban,
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { s = false, d = ex.Message }, statusCode: 500);
+            }
+        })
+            .RequireAuthorization()
+            .WithTags("Dashboard");
+
         app.MapGet("/api/reports/summary", async (
             ClaimsPrincipal user,
             ICompanyAccessService access,
@@ -441,5 +671,33 @@ public static class LaporanKeuanganEndpoints
             .WithTags("Reports");
 
         return app;
+    }
+
+    private static decimal TryParseCoaBalance(string rawJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(rawJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return 0;
+
+            if (!doc.RootElement.TryGetProperty("d", out var d))
+                return 0;
+            if (d.ValueKind != JsonValueKind.Object)
+                return 0;
+            if (!d.TryGetProperty("balance", out var b))
+                return 0;
+
+            return b.ValueKind switch
+            {
+                JsonValueKind.Number => b.GetDecimal(),
+                JsonValueKind.String when decimal.TryParse(b.GetString(), out var p) => p,
+                _ => 0,
+            };
+        }
+        catch
+        {
+            return 0;
+        }
     }
 }

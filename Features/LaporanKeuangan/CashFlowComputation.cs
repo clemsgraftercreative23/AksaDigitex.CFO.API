@@ -20,7 +20,9 @@ internal sealed record CashFlowComputationResult(
 
 internal static class CashFlowComputation
 {
-    private const int MaxIdsPerCompany = 5000;
+    internal const int DefaultMaxIdsPerCompany = 5000;
+    internal const int MinMaxIdsPerCompany = 200;
+    internal const int MaxMaxIdsPerCompany = 5000;
     private const int MaxParallelism = 6;
 
     public static async Task<CashFlowComputationResult> ComputeAsync(
@@ -28,15 +30,19 @@ internal static class CashFlowComputation
         DateOnly fromDate,
         DateOnly toDate,
         IAccurateService service,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int? maxIdsPerCompany = null)
     {
+        var effectiveMaxIds = maxIdsPerCompany is > 0
+            ? Math.Clamp(maxIdsPerCompany.Value, MinMaxIdsPerCompany, MaxMaxIdsPerCompany)
+            : DefaultMaxIdsPerCompany;
         var monthMap = new ConcurrentDictionary<string, (decimal CashIn, decimal CashOut)>(StringComparer.Ordinal);
 
         foreach (var company in companyKeys)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await AccumulateCashInForCompany(company, fromDate, toDate, service, monthMap, cancellationToken);
-            await AccumulateCashOutForCompany(company, fromDate, toDate, service, monthMap, cancellationToken);
+            await AccumulateCashInForCompany(company, fromDate, toDate, service, monthMap, cancellationToken, effectiveMaxIds);
+            await AccumulateCashOutForCompany(company, fromDate, toDate, service, monthMap, cancellationToken, effectiveMaxIds);
         }
 
         var months = EnumerateMonths(fromDate, toDate);
@@ -68,10 +74,11 @@ internal static class CashFlowComputation
         DateOnly toDate,
         IAccurateService service,
         ConcurrentDictionary<string, (decimal CashIn, decimal CashOut)> monthMap,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int maxIdsPerCompany)
     {
         var listRaw = await service.GetOtherDepositListRaw(company);
-        var ids = ParseIdsFromList(listRaw, MaxIdsPerCompany);
+        var ids = ParseIdsFromList(listRaw, maxIdsPerCompany);
         if (ids.Count == 0) return;
 
         var approvedMonthly = new ConcurrentDictionary<string, decimal>(StringComparer.Ordinal);
@@ -107,10 +114,11 @@ internal static class CashFlowComputation
         DateOnly toDate,
         IAccurateService service,
         ConcurrentDictionary<string, (decimal CashIn, decimal CashOut)> monthMap,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int maxIdsPerCompany)
     {
         var listRaw = await service.GetPurchaseInvoiceListRaw(company);
-        var ids = ParseIdsFromList(listRaw, MaxIdsPerCompany);
+        var ids = ParseIdsFromList(listRaw, maxIdsPerCompany);
         if (ids.Count == 0) return;
 
         await Parallel.ForEachAsync(
