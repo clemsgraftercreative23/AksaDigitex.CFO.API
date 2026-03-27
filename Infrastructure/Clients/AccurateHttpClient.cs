@@ -1,6 +1,7 @@
 
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 
 namespace MyBackend.Infrastructure.Clients;
@@ -262,31 +263,17 @@ public class AccurateHttpClient
     }
 
     /// <summary>
-    /// Daftar sales receipt (cash in) untuk diproses detail.
+    /// Daftar other deposit (cash in) untuk diproses detail.
     /// </summary>
-    public async Task<string> GetSalesReceiptListRaw(string? company = null)
+    public async Task<string> GetOtherDepositListRaw(string? company = null)
     {
-        var token = GetToken(company);
-        var signatureKey = _config["Accurate:SignatureKey"];
-        var host = GetHost(company);
-
-        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
-        var signature = GenerateSignature(signatureKey, timestamp);
-        var url = $"{host}/accurate/api/sales-receipt/list.do?fields=id";
-
-        var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Add("Authorization", $"Bearer {token}");
-        request.Headers.Add("X-Api-Timestamp", timestamp);
-        request.Headers.Add("X-Api-Signature", signature);
-
-        var response = await _httpClient.SendAsync(request);
-        return await response.Content.ReadAsStringAsync();
+        return await GetPagedIdListRaw("/accurate/accurate/api/other-deposit/list.do", company);
     }
 
     /// <summary>
-    /// Detail sales receipt, ambil paymentAmount/transDate/status.
+    /// Detail other deposit, ambil amount/transDate/approvalStatus.
     /// </summary>
-    public async Task<string> GetSalesReceiptDetailRaw(string id, string? company = null)
+    public async Task<string> GetOtherDepositDetailRaw(string id, string? company = null)
     {
         var token = GetToken(company);
         var signatureKey = _config["Accurate:SignatureKey"];
@@ -294,7 +281,7 @@ public class AccurateHttpClient
 
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
         var signature = GenerateSignature(signatureKey, timestamp);
-        var url = $"{host}/accurate/api/sales-receipt/detail.do?id={Uri.EscapeDataString(id)}";
+        var url = $"{host}/accurate/accurate/api/other-deposit/detail.do?id={Uri.EscapeDataString(id)}";
 
         var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Add("Authorization", $"Bearer {token}");
@@ -310,21 +297,7 @@ public class AccurateHttpClient
     /// </summary>
     public async Task<string> GetPurchaseInvoiceListRaw(string? company = null)
     {
-        var token = GetToken(company);
-        var signatureKey = _config["Accurate:SignatureKey"];
-        var host = GetHost(company);
-
-        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
-        var signature = GenerateSignature(signatureKey, timestamp);
-        var url = $"{host}/accurate/api/purchase-invoice/list.do?fields=id";
-
-        var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Add("Authorization", $"Bearer {token}");
-        request.Headers.Add("X-Api-Timestamp", timestamp);
-        request.Headers.Add("X-Api-Signature", signature);
-
-        var response = await _httpClient.SendAsync(request);
-        return await response.Content.ReadAsStringAsync();
+        return await GetPagedIdListRaw("/accurate/api/purchase-invoice/list.do", company);
     }
 
     /// <summary>
@@ -369,5 +342,120 @@ public class AccurateHttpClient
 
         var response = await _httpClient.SendAsync(request);
         return await response.Content.ReadAsStringAsync();
+    }
+
+    private async Task<string> GetPagedIdListRaw(string endpointPath, string? company)
+    {
+        const int pageSize = 1000;
+        var allIds = new List<string>(capacity: pageSize);
+
+        for (var page = 1; page <= 200; page++)
+        {
+            var token = GetToken(company);
+            var signatureKey = _config["Accurate:SignatureKey"];
+            var host = GetHost(company);
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+            var signature = GenerateSignature(signatureKey, timestamp);
+            var url = $"{host}{endpointPath}?fields=id&sp.page={page}&sp.pageSize={pageSize}";
+
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Add("Authorization", $"Bearer {token}");
+            request.Headers.Add("X-Api-Timestamp", timestamp);
+            request.Headers.Add("X-Api-Signature", signature);
+
+            var response = await _httpClient.SendAsync(request);
+            var body = await response.Content.ReadAsStringAsync();
+            var idsThisPage = ExtractIds(body);
+            if (idsThisPage.Count == 0)
+                break;
+
+            allIds.AddRange(idsThisPage);
+
+            if (idsThisPage.Count < pageSize)
+                break;
+        }
+
+        if (allIds.Count == 0)
+        {
+            // Fallback: jaga kompatibilitas jika backend Accurate tidak mendukung paging params.
+            return await GetSingleListRawNoPaging(endpointPath, company);
+        }
+
+        var payload = new
+        {
+            s = true,
+            d = allIds.Select(id => new { id }).ToList(),
+        };
+        return JsonSerializer.Serialize(payload);
+    }
+
+    private async Task<string> GetSingleListRawNoPaging(string endpointPath, string? company)
+    {
+        var token = GetToken(company);
+        var signatureKey = _config["Accurate:SignatureKey"];
+        var host = GetHost(company);
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+        var signature = GenerateSignature(signatureKey, timestamp);
+        var url = $"{host}{endpointPath}?fields=id";
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("Authorization", $"Bearer {token}");
+        request.Headers.Add("X-Api-Timestamp", timestamp);
+        request.Headers.Add("X-Api-Signature", signature);
+
+        var response = await _httpClient.SendAsync(request);
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    private static List<string> ExtractIds(string raw)
+    {
+        var ids = new List<string>();
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            if (!doc.RootElement.TryGetProperty("d", out var d))
+                return ids;
+
+            if (d.ValueKind == JsonValueKind.Array)
+            {
+                CollectIds(d, ids);
+                return ids;
+            }
+
+            if (d.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var p in new[] { "rows", "data", "result", "items" })
+                {
+                    if (!d.TryGetProperty(p, out var arr) || arr.ValueKind != JsonValueKind.Array)
+                        continue;
+                    CollectIds(arr, ids);
+                    if (ids.Count > 0)
+                        return ids;
+                }
+            }
+        }
+        catch
+        {
+            // ignore parse failure for paging probe
+        }
+
+        return ids;
+    }
+
+    private static void CollectIds(JsonElement array, List<string> ids)
+    {
+        foreach (var el in array.EnumerateArray())
+        {
+            if (!el.TryGetProperty("id", out var idEl))
+                continue;
+            var id = idEl.ValueKind switch
+            {
+                JsonValueKind.Number => idEl.GetRawText(),
+                JsonValueKind.String => idEl.GetString(),
+                _ => null
+            };
+            if (!string.IsNullOrWhiteSpace(id))
+                ids.Add(id);
+        }
     }
 }

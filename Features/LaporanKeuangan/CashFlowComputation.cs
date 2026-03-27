@@ -70,7 +70,7 @@ internal static class CashFlowComputation
         ConcurrentDictionary<string, (decimal CashIn, decimal CashOut)> monthMap,
         CancellationToken cancellationToken)
     {
-        var listRaw = await service.GetSalesReceiptListRaw(company);
+        var listRaw = await service.GetOtherDepositListRaw(company);
         var ids = ParseIdsFromList(listRaw, MaxIdsPerCompany);
         if (ids.Count == 0) return;
 
@@ -80,9 +80,9 @@ internal static class CashFlowComputation
             async (id, token) =>
             {
                 string raw;
-                try { raw = await service.GetSalesReceiptDetailRaw(id, company); } catch { return; }
-                if (!TryParseSalesReceiptDetail(raw, out var transDate, out var amount, out var statusRaw)) return;
-                if (!IsPaidStatus(statusRaw)) return;
+                try { raw = await service.GetOtherDepositDetailRaw(id, company); } catch { return; }
+                if (!TryParseOtherDepositDetail(raw, out var transDate, out var amount, out var approvalStatus)) return;
+                if (!IsApprovedStatus(approvalStatus)) return;
                 if (transDate < fromDate || transDate > toDate) return;
                 var month = transDate.ToString("yyyy-MM", CultureInfo.InvariantCulture);
                 monthMap.AddOrUpdate(month, (amount, 0m), (_, prev) => (prev.CashIn + amount, prev.CashOut));
@@ -164,24 +164,24 @@ internal static class CashFlowComputation
         }
     }
 
-    private static bool TryParseSalesReceiptDetail(
+    private static bool TryParseOtherDepositDetail(
         string raw,
         out DateOnly transDate,
-        out decimal paymentAmount,
-        out string statusRaw)
+        out decimal amount,
+        out string approvalStatus)
     {
         transDate = default;
-        paymentAmount = 0m;
-        statusRaw = "";
+        amount = 0m;
+        approvalStatus = "";
         try
         {
             using var doc = JsonDocument.Parse(raw);
             if (!doc.RootElement.TryGetProperty("d", out var d) || d.ValueKind != JsonValueKind.Object) return false;
 
             if (!TryReadDate(d, "transDate", out transDate)) return false;
-            paymentAmount = ReadDecimal(d, "paymentAmount", "paidAmount", "amount", "totalAmount");
-            statusRaw = ReadStatusLike(d, new[] { "status", "statusName" });
-            return paymentAmount > 0;
+            amount = ReadDecimal(d, "amount");
+            approvalStatus = ReadStatusLike(d, new[] { "approvalStatus" });
+            return amount > 0;
         }
         catch
         {
@@ -269,26 +269,19 @@ internal static class CashFlowComputation
         return "";
     }
 
-    private static bool IsPaidStatus(string? raw)
-    {
-        // sales-receipt endpoint pada dasarnya transaksi kas masuk; jika field status kosong, tetap hitung.
-        if (string.IsNullOrWhiteSpace(raw)) return true;
-        var s = raw.Trim().ToLowerInvariant();
-        return
-            s.Contains("paid", StringComparison.Ordinal) ||
-            s.Contains("settled", StringComparison.Ordinal) ||
-            s.Contains("closed", StringComparison.Ordinal) ||
-            (s.Contains("lunas", StringComparison.Ordinal) && !s.Contains("belum", StringComparison.Ordinal));
-    }
-
     private static bool IsSettledStatus(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return false;
         var s = raw.Trim().ToLowerInvariant();
         if (s == "0" || s == "0.0" || s == "false") return true;
-        if (s.Contains("lunas", StringComparison.Ordinal) || s.Contains("paid", StringComparison.Ordinal) || s.Contains("settled", StringComparison.Ordinal))
-            return true;
-        return false;
+        return s.Contains("lunas", StringComparison.Ordinal);
+    }
+
+    private static bool IsApprovedStatus(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        var s = raw.Trim();
+        return string.Equals(s, "APPROVED", StringComparison.OrdinalIgnoreCase);
     }
 
     private static List<string> EnumerateMonths(DateOnly fromDate, DateOnly toDate)

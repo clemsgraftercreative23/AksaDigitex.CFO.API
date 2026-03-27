@@ -2,11 +2,208 @@ using System.Security.Claims;
 using System.Text.Json;
 using MyBackend.Application.Services;
 using System.Globalization;
+using QuestPDF.Fluent;
+using QuestPDF.Helpers;
+using QuestPDF.Infrastructure;
 
 namespace MyBackend.Features.LaporanKeuangan;
 
 public static class LaporanKeuanganEndpoints
 {
+    private sealed record LabaRugiPdfRow(
+        string AccountNo,
+        string AccountName,
+        bool IsParent,
+        string ParentNo,
+        decimal Amount,
+        int Lvl
+    );
+
+    private static readonly string[] LabaRugiParentOrder =
+    [
+        "4101", "5100", "6100", "6200", "6300", "7100", "8100", "8200", "8300"
+    ];
+
+    private static List<LabaRugiPdfRow> ParseLabaRugiRows(JsonElement dataElement)
+    {
+        var rows = new List<LabaRugiPdfRow>();
+        if (dataElement.ValueKind != JsonValueKind.Array)
+            return rows;
+
+        foreach (var item in dataElement.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object) continue;
+
+            static string Str(JsonElement e, params string[] keys)
+            {
+                foreach (var k in keys)
+                {
+                    if (e.TryGetProperty(k, out var p))
+                    {
+                        if (p.ValueKind == JsonValueKind.String) return p.GetString() ?? "";
+                        if (p.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False) return p.ToString();
+                    }
+                }
+                return "";
+            }
+
+            static decimal Dec(JsonElement e, params string[] keys)
+            {
+                foreach (var k in keys)
+                {
+                    if (e.TryGetProperty(k, out var p))
+                    {
+                        if (p.ValueKind == JsonValueKind.Number && p.TryGetDecimal(out var d)) return d;
+                        if (p.ValueKind == JsonValueKind.String && decimal.TryParse(p.GetString(), out var ds)) return ds;
+                    }
+                }
+                return 0m;
+            }
+
+            static int Int(JsonElement e, params string[] keys)
+            {
+                foreach (var k in keys)
+                {
+                    if (e.TryGetProperty(k, out var p))
+                    {
+                        if (p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var i)) return i;
+                        if (p.ValueKind == JsonValueKind.String && int.TryParse(p.GetString(), out var si)) return si;
+                    }
+                }
+                return 0;
+            }
+
+            static bool Bool(JsonElement e, params string[] keys)
+            {
+                foreach (var k in keys)
+                {
+                    if (e.TryGetProperty(k, out var p))
+                    {
+                        if (p.ValueKind == JsonValueKind.True) return true;
+                        if (p.ValueKind == JsonValueKind.False) return false;
+                        if (p.ValueKind == JsonValueKind.String && bool.TryParse(p.GetString(), out var bs)) return bs;
+                    }
+                }
+                return false;
+            }
+
+            var accountNo = Str(item, "accountNo", "no");
+            var accountName = Str(item, "accountName", "name");
+            var parentNo = Str(item, "parentNo", "parent");
+            var amount = Dec(item, "amount");
+            var lvl = Int(item, "lvl");
+            var isParent = Bool(item, "isParent");
+
+            rows.Add(new LabaRugiPdfRow(accountNo, accountName, isParent, parentNo, amount, lvl));
+        }
+
+        return rows;
+    }
+
+    private static decimal GetParentAmount(List<LabaRugiPdfRow> rows, string parentNo)
+        => rows.FirstOrDefault(r => r.IsParent && r.AccountNo == parentNo)?.Amount ?? 0m;
+
+    private static byte[] BuildLabaRugiPdf(
+        string periodLabel,
+        List<(string CompanyName, List<LabaRugiPdfRow> Rows)> blocks)
+    {
+        QuestPDF.Settings.License = LicenseType.Community;
+
+        var document = Document.Create(container =>
+        {
+            container.Page(page =>
+            {
+                page.Size(PageSizes.A4);
+                page.Margin(24);
+                page.DefaultTextStyle(x => x.FontSize(10));
+
+                page.Header().Column(header =>
+                {
+                    header.Item().Text("Laporan Laba Rugi")
+                        .FontSize(18).Bold().FontColor(Colors.Blue.Darken2);
+                    header.Item().Text($"Periode: {periodLabel}")
+                        .FontSize(10).FontColor(Colors.Grey.Darken1);
+                    header.Item().PaddingTop(4).LineHorizontal(1).LineColor(Colors.Blue.Medium);
+                });
+
+                page.Content().Column(content =>
+                {
+                    foreach (var block in blocks)
+                    {
+                        var rows = block.Rows;
+                        var totalPendapatan = GetParentAmount(rows, "4101");
+                        var safePendapatan = totalPendapatan == 0 ? 1 : totalPendapatan;
+                        var hpp = GetParentAmount(rows, "5100");
+                        var labaKotor = totalPendapatan - hpp;
+                        var bebanOp = GetParentAmount(rows, "6100") + GetParentAmount(rows, "6200") + GetParentAmount(rows, "6300");
+                        var labaUsaha = labaKotor - bebanOp;
+                        var pendLain = GetParentAmount(rows, "7100");
+                        var bebanLain = GetParentAmount(rows, "8100") + GetParentAmount(rows, "8200") + GetParentAmount(rows, "8300");
+                        var labaBersih = labaUsaha + pendLain - bebanLain;
+
+                        content.Item().PaddingTop(10).Text(block.CompanyName)
+                            .Bold().FontSize(13).FontColor(Colors.Grey.Darken3);
+
+                        foreach (var parentNo in LabaRugiParentOrder)
+                        {
+                            var parent = rows.FirstOrDefault(r => r.IsParent && r.AccountNo == parentNo);
+                            if (parent is null) continue;
+                            var children = rows.Where(r => !r.IsParent && r.ParentNo == parentNo).ToList();
+                            var parentAmount = parent.Amount;
+
+                            content.Item().PaddingTop(6).Text(parent.AccountName.ToUpperInvariant())
+                                .Bold().FontSize(11);
+
+                            content.Item().Table(table =>
+                            {
+                                table.ColumnsDefinition(col =>
+                                {
+                                    col.RelativeColumn(3);
+                                    col.RelativeColumn(2);
+                                    col.RelativeColumn(1);
+                                });
+
+                                table.Header(h =>
+                                {
+                                    h.Cell().Background(Colors.Blue.Lighten5).Padding(4).Text("Akun").Bold();
+                                    h.Cell().Background(Colors.Blue.Lighten5).Padding(4).AlignRight().Text("Jumlah").Bold();
+                                    h.Cell().Background(Colors.Blue.Lighten5).Padding(4).AlignRight().Text("% Pendapatan").Bold();
+                                });
+
+                                foreach (var c in children)
+                                {
+                                    var pct = c.Amount == 0 ? 0 : (c.Amount / safePendapatan) * 100m;
+                                    table.Cell().BorderBottom(1).BorderColor(Colors.Grey.Lighten2).Padding(4).Text(c.AccountName);
+                                    table.Cell().BorderBottom(1).BorderColor(Colors.Grey.Lighten2).Padding(4).AlignRight()
+                                        .Text($"{c.Amount:N0}");
+                                    table.Cell().BorderBottom(1).BorderColor(Colors.Grey.Lighten2).Padding(4).AlignRight()
+                                        .Text(c.Amount == 0 ? "-" : $"{pct:N2}%");
+                                }
+
+                                var pPct = parentAmount == 0 ? 0 : (parentAmount / safePendapatan) * 100m;
+                                table.Cell().Background(Colors.Grey.Lighten4).Padding(4).Text($"TOTAL {parent.AccountName}").Bold();
+                                table.Cell().Background(Colors.Grey.Lighten4).Padding(4).AlignRight().Text($"{parentAmount:N0}").Bold();
+                                table.Cell().Background(Colors.Grey.Lighten4).Padding(4).AlignRight()
+                                    .Text(parentAmount == 0 ? "-" : $"{pPct:N2}%").Bold();
+                            });
+
+                            if (parentNo == "5100")
+                                content.Item().PaddingTop(4).Text($"Laba Kotor: {labaKotor:N0}").Bold();
+                            if (parentNo == "6300")
+                                content.Item().PaddingTop(4).Text($"Laba Usaha: {labaUsaha:N0}").Bold();
+                        }
+
+                        content.Item().PaddingVertical(8).Background(Colors.Blue.Darken2).Padding(6)
+                            .Text($"LABA BERSIH: {labaBersih:N0}")
+                            .Bold().FontColor(Colors.White);
+                    }
+                });
+            });
+        });
+
+        return document.GeneratePdf();
+    }
+
     /// <summary>
     /// Registers Laporan Keuangan API routes.
     /// </summary>
@@ -68,6 +265,53 @@ public static class LaporanKeuanganEndpoints
             .RequireAuthorization()
             .WithTags("Laporan Keuangan");
 
+        app.MapGet("/api/laporan-keuangan/laba-rugi/pdf", async (
+            ClaimsPrincipal user,
+            string fromDate,
+            string toDate,
+            string[]? company,
+            IAccurateService service,
+            ICompanyAccessService access,
+            CancellationToken cancellationToken) =>
+        {
+            var companyValues = company ?? Array.Empty<string>();
+            var accessResult = await access.NormalizeAndAuthorizeAsync(
+                user,
+                companyValues,
+                cancellationToken);
+            if (!accessResult.Success)
+                return Results.Json(new { error = accessResult.Error }, statusCode: accessResult.StatusCode);
+
+            var keys = accessResult.AccurateCompanyKeys;
+            try
+            {
+                var blocks = new List<(string CompanyName, List<LabaRugiPdfRow> Rows)>();
+                foreach (var companyName in keys)
+                {
+                    var rawJson = await service.GetPlAccountAmountRaw(fromDate, toDate, companyName);
+                    using var doc = JsonDocument.Parse(rawJson);
+                    if (!doc.RootElement.TryGetProperty("d", out var d))
+                        continue;
+
+                    blocks.Add((companyName, ParseLabaRugiRows(d)));
+                }
+
+                if (blocks.Count == 0)
+                    return Results.BadRequest(new { s = false, d = "Tidak ada data untuk diexport ke PDF." });
+
+                var periodLabel = $"{fromDate} - {toDate}";
+                var pdfBytes = BuildLabaRugiPdf(periodLabel, blocks);
+                var fileName = $"Laporan_Laba_Rugi_{DateTime.UtcNow:yyyyMMdd_HHmmss}.pdf";
+                return Results.File(pdfBytes, "application/pdf", fileName);
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { s = false, d = ex.Message }, statusCode: 500);
+            }
+        })
+            .RequireAuthorization()
+            .WithTags("Laporan Keuangan");
+
         app.MapGet("/api/laporan-keuangan/neraca", async (
             ClaimsPrincipal user,
             string asOfDate,
@@ -120,6 +364,7 @@ public static class LaporanKeuanganEndpoints
             string fromDate,
             string toDate,
             string[]? company,
+            bool? debug,
             IAccurateService service,
             ICompanyAccessService access,
             CancellationToken cancellationToken) =>
