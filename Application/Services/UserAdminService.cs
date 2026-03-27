@@ -10,6 +10,7 @@ namespace MyBackend.Application.Services;
 
 public class UserAdminService : IUserAdminService
 {
+    private const int MinPasswordLength = 8;
     private readonly CfoDbContext _db;
     private readonly IPasswordHasherService _passwordHasher;
 
@@ -80,10 +81,13 @@ public class UserAdminService : IUserAdminService
         CancellationToken cancellationToken = default)
     {
         var email = request.Email?.Trim();
+        var password = request.Password?.Trim();
         if (string.IsNullOrWhiteSpace(email))
             return (false, 400, "Email is required.", null);
-        if (string.IsNullOrWhiteSpace(request.Password))
+        if (string.IsNullOrWhiteSpace(password))
             return (false, 400, "Password is required.", null);
+        if (password.Length < MinPasswordLength)
+            return (false, 400, $"Password must be at least {MinPasswordLength} characters.", null);
         if (string.IsNullOrWhiteSpace(request.FullName))
             return (false, 400, "Full name is required.", null);
         if (string.IsNullOrWhiteSpace(request.RoleName))
@@ -124,7 +128,7 @@ public class UserAdminService : IUserAdminService
         {
             Email = email,
             FullName = request.FullName!.Trim(),
-            PasswordHash = _passwordHasher.HashPassword(request.Password!),
+            PasswordHash = _passwordHasher.HashPassword(password),
             RoleId = role.Id,
             Position = string.IsNullOrWhiteSpace(request.Position) ? null : request.Position.Trim(),
             CompanyId = request.CompanyId,
@@ -225,8 +229,13 @@ public class UserAdminService : IUserAdminService
         if (request.IsAllCompany.HasValue)
             user.IsAllCompany = request.IsAllCompany.Value;
 
-        if (!string.IsNullOrWhiteSpace(request.Password))
-            user.PasswordHash = _passwordHasher.HashPassword(request.Password!);
+        var newPassword = request.Password?.Trim();
+        if (!string.IsNullOrWhiteSpace(newPassword))
+        {
+            if (newPassword.Length < MinPasswordLength)
+                return (false, 400, $"Password must be at least {MinPasswordLength} characters.", null);
+            user.PasswordHash = _passwordHasher.HashPassword(newPassword);
+        }
 
         await _db.SaveChangesAsync(cancellationToken);
         var dto = await GetByIdAsync(id, cancellationToken);
