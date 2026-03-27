@@ -112,6 +112,9 @@ builder.Services.AddSingleton<IAccurateCompanyKeyResolver, AccurateCompanyKeyRes
 builder.Services.AddScoped<ICompanyAccessService, CompanyAccessService>();
 builder.Services.AddScoped<IUserAdminService, UserAdminService>();
 
+// In-process cache (no Redis required) — used for Dashboard overview cards (5 min TTL)
+builder.Services.AddMemoryCache();
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
