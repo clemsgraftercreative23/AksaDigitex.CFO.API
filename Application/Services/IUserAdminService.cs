@@ -15,4 +15,5 @@ public interface IUserAdminService
     Task<(bool ok, int statusCode, string? error, UserDetailDto? user)> CreateAsync(CreateUserRequest request, CancellationToken cancellationToken = default);
     Task<(bool ok, int statusCode, string? error, UserDetailDto? user)> UpdateAsync(int id, UpdateUserRequest request, ClaimsPrincipal actor, CancellationToken cancellationToken = default);
     Task<(bool ok, int statusCode, string? error)> SoftDeleteAsync(int id, ClaimsPrincipal actor, CancellationToken cancellationToken = default);
+    Task<(bool ok, int statusCode, string? error)> HardDeleteAsync(int id, ClaimsPrincipal actor, CancellationToken cancellationToken = default);
 }

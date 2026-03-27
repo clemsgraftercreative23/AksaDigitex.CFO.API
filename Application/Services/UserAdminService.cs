@@ -257,6 +257,29 @@ public class UserAdminService : IUserAdminService
         return (true, 204, null);
     }
 
+    public async Task<(bool ok, int statusCode, string? error)> HardDeleteAsync(
+        int id,
+        ClaimsPrincipal actor,
+        CancellationToken cancellationToken = default)
+    {
+        var user = await _db.Users.Include(u => u.Role).FirstOrDefaultAsync(u => u.Id == id, cancellationToken);
+        if (user == null)
+            return (false, 404, "User not found.");
+        if (IsSelf(actor, id))
+            return (false, 400, "You cannot delete your own account.");
+
+        try
+        {
+            _db.Users.Remove(user);
+            await _db.SaveChangesAsync(cancellationToken);
+            return (true, 204, null);
+        }
+        catch (DbUpdateException)
+        {
+            return (false, 409, "User tidak bisa dihapus permanen karena masih dipakai data lain.");
+        }
+    }
+
     private static bool IsSelf(ClaimsPrincipal actor, int userId) =>
         int.TryParse(actor.FindFirstValue(ClaimTypes.NameIdentifier), out var selfId) && selfId == userId;
 

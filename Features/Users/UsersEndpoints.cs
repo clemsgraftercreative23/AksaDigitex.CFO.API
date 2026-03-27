@@ -65,6 +65,18 @@ public static class UsersEndpoints
                 return Results.NoContent();
             });
 
+        admin.MapDelete("/{id:int}/hard", async Task<IResult> (
+                int id,
+                IUserAdminService users,
+                HttpContext http,
+                CancellationToken cancellationToken) =>
+            {
+                var (ok, status, error) = await users.HardDeleteAsync(id, http.User, cancellationToken);
+                if (!ok)
+                    return Results.Json(new { error }, statusCode: status);
+                return Results.NoContent();
+            });
+
         return app;
     }
 }
