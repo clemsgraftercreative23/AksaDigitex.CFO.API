@@ -267,7 +267,12 @@ public class AccurateHttpClient
     /// </summary>
     public async Task<string> GetOtherDepositListRaw(string? company = null)
     {
-        return await GetPagedIdListRaw("/accurate/accurate/api/other-deposit/list.do", company);
+        var primary = await GetPagedIdListRaw("/accurate/accurate/api/other-deposit/list.do", company);
+        if (ExtractIds(primary).Count > 0)
+            return primary;
+
+        // Fallback untuk instance host yang hanya butuh satu segmen "/accurate".
+        return await GetPagedIdListRaw("/accurate/api/other-deposit/list.do", company);
     }
 
     /// <summary>
@@ -275,13 +280,23 @@ public class AccurateHttpClient
     /// </summary>
     public async Task<string> GetOtherDepositDetailRaw(string id, string? company = null)
     {
+        var primary = await GetOtherDepositDetailRawByPath(id, "/accurate/accurate/api/other-deposit/detail.do", company);
+        if (LooksLikeValidDetail(primary))
+            return primary;
+
+        // Fallback untuk instance host yang hanya butuh satu segmen "/accurate".
+        return await GetOtherDepositDetailRawByPath(id, "/accurate/api/other-deposit/detail.do", company);
+    }
+
+    private async Task<string> GetOtherDepositDetailRawByPath(string id, string endpointPath, string? company)
+    {
         var token = GetToken(company);
         var signatureKey = _config["Accurate:SignatureKey"];
         var host = GetHost(company);
 
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
         var signature = GenerateSignature(signatureKey, timestamp);
-        var url = $"{host}/accurate/accurate/api/other-deposit/detail.do?id={Uri.EscapeDataString(id)}";
+        var url = $"{host}{endpointPath}?id={Uri.EscapeDataString(id)}";
 
         var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Add("Authorization", $"Bearer {token}");
@@ -456,6 +471,24 @@ public class AccurateHttpClient
             };
             if (!string.IsNullOrWhiteSpace(id))
                 ids.Add(id);
+        }
+    }
+
+    private static bool LooksLikeValidDetail(string raw)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return false;
+            if (root.TryGetProperty("d", out var d))
+                return d.ValueKind == JsonValueKind.Object;
+            return root.ValueKind == JsonValueKind.Object;
+        }
+        catch
+        {
+            return false;
         }
     }
 }

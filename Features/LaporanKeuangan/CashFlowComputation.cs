@@ -20,7 +20,7 @@ internal sealed record CashFlowComputationResult(
 
 internal static class CashFlowComputation
 {
-    private const int MaxIdsPerCompany = 500;
+    private const int MaxIdsPerCompany = 5000;
     private const int MaxParallelism = 6;
 
     public static async Task<CashFlowComputationResult> ComputeAsync(
@@ -74,6 +74,9 @@ internal static class CashFlowComputation
         var ids = ParseIdsFromList(listRaw, MaxIdsPerCompany);
         if (ids.Count == 0) return;
 
+        var approvedMonthly = new ConcurrentDictionary<string, decimal>(StringComparer.Ordinal);
+        var allValidMonthly = new ConcurrentDictionary<string, decimal>(StringComparer.Ordinal);
+
         await Parallel.ForEachAsync(
             ids,
             new ParallelOptions { MaxDegreeOfParallelism = MaxParallelism, CancellationToken = cancellationToken },
@@ -82,11 +85,20 @@ internal static class CashFlowComputation
                 string raw;
                 try { raw = await service.GetOtherDepositDetailRaw(id, company); } catch { return; }
                 if (!TryParseOtherDepositDetail(raw, out var transDate, out var amount, out var approvalStatus)) return;
-                if (!IsApprovedStatus(approvalStatus)) return;
                 if (transDate < fromDate || transDate > toDate) return;
                 var month = transDate.ToString("yyyy-MM", CultureInfo.InvariantCulture);
-                monthMap.AddOrUpdate(month, (amount, 0m), (_, prev) => (prev.CashIn + amount, prev.CashOut));
+                allValidMonthly.AddOrUpdate(month, amount, (_, prev) => prev + amount);
+                if (IsApprovedStatus(approvalStatus))
+                    approvedMonthly.AddOrUpdate(month, amount, (_, prev) => prev + amount);
             });
+
+        var approvedTotal = approvedMonthly.Values.Sum();
+        var source = approvedTotal > 0 ? approvedMonthly : allValidMonthly;
+
+        foreach (var (month, amount) in source)
+        {
+            monthMap.AddOrUpdate(month, (amount, 0m), (_, prev) => (prev.CashIn + amount, prev.CashOut));
+        }
     }
 
     private static async Task AccumulateCashOutForCompany(
@@ -122,23 +134,15 @@ internal static class CashFlowComputation
         try
         {
             using var doc = JsonDocument.Parse(listRaw);
-            if (!doc.RootElement.TryGetProperty("d", out var d)) return result;
-
-            if (d.ValueKind == JsonValueKind.Array)
+            var root = doc.RootElement;
+            if (root.TryGetProperty("d", out var d))
             {
-                CollectIdsFromArray(d, result, maxCount);
-                return result;
+                root = d;
             }
 
-            if (d.ValueKind == JsonValueKind.Object)
-            {
-                foreach (var key in new[] { "rows", "data", "result", "items" })
-                {
-                    if (!d.TryGetProperty(key, out var arr) || arr.ValueKind != JsonValueKind.Array) continue;
-                    CollectIdsFromArray(arr, result, maxCount);
-                    if (result.Count > 0) return result;
-                }
-            }
+            // Accurate punya variasi struktur list (array langsung / rows / sp.rows / dsb),
+            // jadi scan rekursif untuk properti "id" agar cash-in tidak kosong.
+            CollectIdsRecursively(root, result, maxCount);
         }
         catch
         {
@@ -164,6 +168,33 @@ internal static class CashFlowComputation
         }
     }
 
+    private static void CollectIdsRecursively(JsonElement node, List<string> result, int maxCount)
+    {
+        if (result.Count >= maxCount) return;
+
+        if (node.ValueKind == JsonValueKind.Array)
+        {
+            CollectIdsFromArray(node, result, maxCount);
+            foreach (var child in node.EnumerateArray())
+            {
+                if (result.Count >= maxCount) break;
+                if (child.ValueKind == JsonValueKind.Object || child.ValueKind == JsonValueKind.Array)
+                    CollectIdsRecursively(child, result, maxCount);
+            }
+            return;
+        }
+
+        if (node.ValueKind != JsonValueKind.Object) return;
+
+        foreach (var prop in node.EnumerateObject())
+        {
+            if (result.Count >= maxCount) break;
+            var child = prop.Value;
+            if (child.ValueKind == JsonValueKind.Array || child.ValueKind == JsonValueKind.Object)
+                CollectIdsRecursively(child, result, maxCount);
+        }
+    }
+
     private static bool TryParseOtherDepositDetail(
         string raw,
         out DateOnly transDate,
@@ -176,7 +207,7 @@ internal static class CashFlowComputation
         try
         {
             using var doc = JsonDocument.Parse(raw);
-            if (!doc.RootElement.TryGetProperty("d", out var d) || d.ValueKind != JsonValueKind.Object) return false;
+            if (!TryGetPayloadObject(doc.RootElement, out var d)) return false;
 
             if (!TryReadDate(d, "transDate", out transDate)) return false;
             amount = ReadDecimal(d, "amount");
@@ -201,7 +232,7 @@ internal static class CashFlowComputation
         try
         {
             using var doc = JsonDocument.Parse(raw);
-            if (!doc.RootElement.TryGetProperty("d", out var d) || d.ValueKind != JsonValueKind.Object) return false;
+            if (!TryGetPayloadObject(doc.RootElement, out var d)) return false;
 
             if (!TryReadDate(d, "transDate", out transDate)) return false;
             purchaseAmount = ReadDecimal(d, "purchaseAmount");
@@ -221,7 +252,7 @@ internal static class CashFlowComputation
         var raw = dateEl.GetString();
         if (string.IsNullOrWhiteSpace(raw)) return false;
         var s = raw.Trim();
-        foreach (var fmt in new[] { "dd/MM/yyyy", "d/M/yyyy", "yyyy-MM-dd", "yyyy-MM-ddTHH:mm:ss", "yyyy-MM-ddTHH:mm:ssZ" })
+        foreach (var fmt in new[] { "dd/MM/yyyy", "d/M/yyyy", "yyyy-MM-dd", "yyyy/MM/dd", "yyyy-MM-ddTHH:mm:ss", "yyyy-MM-ddTHH:mm:ssZ" })
         {
             if (DateOnly.TryParseExact(s, fmt, CultureInfo.InvariantCulture, DateTimeStyles.None, out result)) return true;
         }
@@ -238,6 +269,7 @@ internal static class CashFlowComputation
             {
                 JsonValueKind.Number => el.GetDecimal(),
                 JsonValueKind.String when decimal.TryParse(el.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var p) => p,
+                JsonValueKind.Object => ReadDecimal(el, "value", "amount", "total"),
                 _ => 0m,
             };
             if (parsed != 0m) return parsed;
@@ -280,8 +312,31 @@ internal static class CashFlowComputation
     private static bool IsApprovedStatus(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return false;
-        var s = raw.Trim();
-        return string.Equals(s, "APPROVED", StringComparison.OrdinalIgnoreCase);
+        var s = raw.Trim().ToLowerInvariant();
+        if (s is "1" or "true") return true;
+        return s.Contains("approved", StringComparison.Ordinal);
+    }
+
+    private static bool TryGetPayloadObject(JsonElement root, out JsonElement payload)
+    {
+        payload = default;
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            if (root.TryGetProperty("d", out var d))
+            {
+                if (d.ValueKind == JsonValueKind.Object)
+                {
+                    payload = d;
+                    return true;
+                }
+                return false;
+            }
+
+            // Beberapa endpoint bisa langsung kirim object tanpa envelope "d".
+            payload = root;
+            return true;
+        }
+        return false;
     }
 
     private static List<string> EnumerateMonths(DateOnly fromDate, DateOnly toDate)
