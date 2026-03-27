@@ -41,24 +41,9 @@ public class CompanyAccessService : ICompanyAccessService
 
         if (isAll)
         {
-            var activeCompanies = await _db.Companies
-                .AsNoTracking()
-                .Where(c => c.IsActive)
-                .ToListAsync(cancellationToken);
-
-            var set = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var c in activeCompanies)
-            {
-                var k = _resolver.ResolveToAccurateKey(c.CompanyName, accurateKeys)
-                    ?? (c.CompanyCode != null ? _resolver.ResolveToAccurateKey(c.CompanyCode, accurateKeys) : null);
-                if (k != null)
-                    set.Add(k);
-            }
-
-            if (set.Count == 0)
-                return accurateKeys;
-
-            return set.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+            // isAllCompany harus benar-benar melihat semua entitas Accurate yang terkonfigurasi,
+            // tidak dibatasi tabel Companies internal CFO.
+            return accurateKeys.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
         var companyIdClaim = user.FindFirst(AppClaims.CompanyId)?.Value;
