@@ -1,5 +1,7 @@
+using System.IO;
 using System.Security.Claims;
 using System.Text.Json;
+using Microsoft.AspNetCore.Hosting;
 using MyBackend.Application.Services;
 using System.Globalization;
 using QuestPDF.Fluent;
@@ -105,11 +107,42 @@ public static class LaporanKeuanganEndpoints
     private static decimal GetParentAmount(List<LabaRugiPdfRow> rows, string parentNo)
         => rows.FirstOrDefault(r => r.IsParent && r.AccountNo == parentNo)?.Amount ?? 0m;
 
-    private static byte[] BuildLabaRugiPdf(
-        string periodLabel,
+    private const string GroupLetterheadLogoFileName = "AKARSA HEKSA BERSAUDARA LOGO.png";
+
+    private static string? ResolveLetterheadLogoPath(
+        string? webRootPath,
         List<(string CompanyName, List<LabaRugiPdfRow> Rows)> blocks)
     {
+        if (string.IsNullOrWhiteSpace(webRootPath)) return null;
+        var assetsDir = Path.Combine(webRootPath, "assets");
+        if (!Directory.Exists(assetsDir)) return null;
+
+        if (blocks.Count > 1)
+        {
+            var p = Path.Combine(assetsDir, GroupLetterheadLogoFileName);
+            return File.Exists(p) ? p : null;
+        }
+
+        if (blocks.Count == 1)
+        {
+            var name = blocks[0].CompanyName;
+            var png = Path.Combine(assetsDir, $"{name}.png");
+            if (File.Exists(png)) return png;
+            var jpg = Path.Combine(assetsDir, $"{name}.jpg");
+            if (File.Exists(jpg)) return jpg;
+        }
+
+        return null;
+    }
+
+    private static byte[] BuildLabaRugiPdf(
+        string periodLabel,
+        List<(string CompanyName, List<LabaRugiPdfRow> Rows)> blocks,
+        string? webRootPath)
+    {
         QuestPDF.Settings.License = LicenseType.Community;
+
+        var logoPath = ResolveLetterheadLogoPath(webRootPath, blocks);
 
         var document = Document.Create(container =>
         {
@@ -119,13 +152,18 @@ public static class LaporanKeuanganEndpoints
                 page.Margin(24);
                 page.DefaultTextStyle(x => x.FontSize(10));
 
-                page.Header().Column(header =>
+                page.Header().Row(row =>
                 {
-                    header.Item().Text("Laporan Laba Rugi")
-                        .FontSize(18).Bold().FontColor(Colors.Blue.Darken2);
-                    header.Item().Text($"Periode: {periodLabel}")
-                        .FontSize(10).FontColor(Colors.Grey.Darken1);
-                    header.Item().PaddingTop(4).LineHorizontal(1).LineColor(Colors.Blue.Medium);
+                    row.RelativeItem().Column(header =>
+                    {
+                        header.Item().Text("Laporan Laba Rugi")
+                            .FontSize(18).Bold().FontColor(Colors.Blue.Darken2);
+                        header.Item().Text($"Periode: {periodLabel}")
+                            .FontSize(10).FontColor(Colors.Grey.Darken1);
+                        header.Item().PaddingTop(4).LineHorizontal(1).LineColor(Colors.Blue.Medium);
+                    });
+                    if (logoPath is not null)
+                        row.ConstantItem(100).Height(48).AlignMiddle().PaddingLeft(8).Image(logoPath).FitHeight();
                 });
 
                 page.Content().Column(content =>
@@ -274,6 +312,7 @@ public static class LaporanKeuanganEndpoints
             string[]? company,
             IAccurateService service,
             ICompanyAccessService access,
+            IWebHostEnvironment env,
             CancellationToken cancellationToken) =>
         {
             var companyValues = company ?? Array.Empty<string>();
@@ -302,7 +341,10 @@ public static class LaporanKeuanganEndpoints
                     return Results.BadRequest(new { s = false, d = "Tidak ada data untuk diexport ke PDF." });
 
                 var periodLabel = $"{fromDate} - {toDate}";
-                var pdfBytes = BuildLabaRugiPdf(periodLabel, blocks);
+                var webRoot = env.WebRootPath;
+                if (string.IsNullOrEmpty(webRoot))
+                    webRoot = Path.Combine(env.ContentRootPath ?? ".", "wwwroot");
+                var pdfBytes = BuildLabaRugiPdf(periodLabel, blocks, webRoot);
                 var fileName = $"Laporan_Laba_Rugi_{DateTime.UtcNow:yyyyMMdd_HHmmss}.pdf";
                 return Results.File(pdfBytes, "application/pdf", fileName);
             }
