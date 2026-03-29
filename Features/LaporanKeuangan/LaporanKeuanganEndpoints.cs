@@ -14,6 +14,18 @@ public static class LaporanKeuanganEndpoints
 {
     private static readonly string[] DashboardOverviewCoaNos = ["4101", "1103", "2101", "2102", "2103", "5100", "6100", "6200", "6300"];
 
+    // Cache TTL: 5 minutes absolute, 5 minutes sliding (whichever fires first)
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
+
+    // One semaphore per cache key to prevent thundering-herd / cache stampede
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> _keyLocks = new();
+
+    private static string BuildOverviewCacheKey(IReadOnlyList<string> sortedKeys)
+        => "dashboard:overview:" + string.Join("|", sortedKeys);
+
+    private static SemaphoreSlim GetLock(string cacheKey)
+        => _keyLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
+
     private sealed record LabaRugiPdfRow(
         string AccountNo,
         string AccountName,
@@ -601,6 +613,7 @@ public static class LaporanKeuanganEndpoints
             string[]? company,
             IAccurateService service,
             ICompanyAccessService access,
+            IMemoryCache cache,
             CancellationToken cancellationToken) =>
         {
             var companyValues = company ?? Array.Empty<string>();
@@ -611,87 +624,148 @@ public static class LaporanKeuanganEndpoints
             if (!accessResult.Success)
                 return Results.Json(new { error = accessResult.Error }, statusCode: accessResult.StatusCode);
 
+            // Build a deterministic cache key from sorted authorized company names
             var keys = accessResult.AccurateCompanyKeys;
-            decimal totalPendapatan = 0m;
-            decimal totalPiutang = 0m;
-            decimal totalHutang = 0m;
-            decimal totalBeban = 0m;
-            var gate = new object();
+            var sortedKeys = keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
+            var cacheKey = BuildOverviewCacheKey(sortedKeys);
 
-            try
+            // Fast path — data already in cache
+            if (cache.TryGetValue(cacheKey, out OverviewCardsCachedResult? cached) && cached is not null)
             {
-                await Parallel.ForEachAsync(
-                    keys,
-                    new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = cancellationToken },
-                    async (companyName, token) =>
-                    {
-                        decimal pendapatan = 0m;
-                        decimal piutang = 0m;
-                        decimal hutang = 0m;
-                        decimal beban = 0m;
-
-                        foreach (var coaNo in DashboardOverviewCoaNos)
-                        {
-                            token.ThrowIfCancellationRequested();
-                            string raw;
-                            try
-                            {
-                                raw = await service.GetCoaDetailRaw(coaNo, companyName);
-                            }
-                            catch
-                            {
-                                continue;
-                            }
-
-                            var balance = TryParseCoaBalance(raw);
-                            switch (coaNo)
-                            {
-                                case "4101":
-                                    pendapatan += balance;
-                                    break;
-                                case "1103":
-                                    piutang += balance;
-                                    break;
-                                case "2101":
-                                case "2102":
-                                case "2103":
-                                    hutang += balance;
-                                    break;
-                                case "5100":
-                                case "6100":
-                                case "6200":
-                                case "6300":
-                                    beban += balance;
-                                    break;
-                            }
-                        }
-
-                        lock (gate)
-                        {
-                            totalPendapatan += pendapatan;
-                            totalPiutang += piutang;
-                            totalHutang += hutang;
-                            totalBeban += beban;
-                        }
-                    });
-
                 return Results.Json(new
                 {
                     s = true,
                     companyScope = keys,
-                    totalPendapatan,
-                    totalPiutang,
-                    totalHutang,
-                    labaBersih = totalPendapatan - totalBeban,
+                    cached.TotalPendapatan,
+                    cached.TotalPiutang,
+                    cached.TotalHutang,
+                    labaBersih = cached.TotalPendapatan - cached.TotalBeban,
+                    fromCache = true,
+                    cachedAtUtc = cached.CachedAtUtc,
                 });
             }
-            catch (OperationCanceledException)
+
+            // Slow path — fetch from Accurate, protected by per-key semaphore
+            var keyLock = GetLock(cacheKey);
+            await keyLock.WaitAsync(cancellationToken);
+            try
             {
-                throw;
+                // Double-check after acquiring lock
+                if (cache.TryGetValue(cacheKey, out cached) && cached is not null)
+                {
+                    return Results.Json(new
+                    {
+                        s = true,
+                        companyScope = keys,
+                        cached.TotalPendapatan,
+                        cached.TotalPiutang,
+                        cached.TotalHutang,
+                        labaBersih = cached.TotalPendapatan - cached.TotalBeban,
+                        fromCache = true,
+                        cachedAtUtc = cached.CachedAtUtc,
+                    });
+                }
+
+                decimal totalPendapatan = 0m;
+                decimal totalPiutang = 0m;
+                decimal totalHutang = 0m;
+                decimal totalBeban = 0m;
+                var gate = new object();
+
+                try
+                {
+                    await Parallel.ForEachAsync(
+                        sortedKeys,
+                        new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = cancellationToken },
+                        async (companyName, token) =>
+                        {
+                            decimal pendapatan = 0m;
+                            decimal piutang = 0m;
+                            decimal hutang = 0m;
+                            decimal beban = 0m;
+
+                            foreach (var coaNo in DashboardOverviewCoaNos)
+                            {
+                                token.ThrowIfCancellationRequested();
+                                string raw;
+                                try
+                                {
+                                    raw = await service.GetCoaDetailRaw(coaNo, companyName);
+                                }
+                                catch
+                                {
+                                    continue;
+                                }
+
+                                var balance = TryParseCoaBalance(raw);
+                                switch (coaNo)
+                                {
+                                    case "4101":
+                                        pendapatan += balance;
+                                        break;
+                                    case "1103":
+                                        piutang += balance;
+                                        break;
+                                    case "2101":
+                                    case "2102":
+                                    case "2103":
+                                        hutang += balance;
+                                        break;
+                                    case "5100":
+                                    case "6100":
+                                    case "6200":
+                                    case "6300":
+                                        beban += balance;
+                                        break;
+                                }
+                            }
+
+                            lock (gate)
+                            {
+                                totalPendapatan += pendapatan;
+                                totalPiutang += piutang;
+                                totalHutang += hutang;
+                                totalBeban += beban;
+                            }
+                        });
+
+                    var result = new OverviewCardsCachedResult(
+                        TotalPendapatan: totalPendapatan,
+                        TotalPiutang: totalPiutang,
+                        TotalHutang: totalHutang,
+                        TotalBeban: totalBeban,
+                        CachedAtUtc: DateTime.UtcNow);
+
+                    cache.Set(cacheKey, result, new MemoryCacheEntryOptions()
+                    {
+                        AbsoluteExpirationRelativeToNow = CacheTtl,
+                        SlidingExpiration = CacheTtl,
+                        Priority = CacheItemPriority.Normal,
+                    });
+
+                    return Results.Json(new
+                    {
+                        s = true,
+                        companyScope = keys,
+                        totalPendapatan,
+                        totalPiutang,
+                        totalHutang,
+                        labaBersih = totalPendapatan - totalBeban,
+                        fromCache = false,
+                    });
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    return Results.Json(new { s = false, d = ex.Message }, statusCode: 500);
+                }
             }
-            catch (Exception ex)
+            finally
             {
-                return Results.Json(new { s = false, d = ex.Message }, statusCode: 500);
+                keyLock.Release();
             }
         })
             .RequireAuthorization()
@@ -742,4 +816,12 @@ public static class LaporanKeuanganEndpoints
             return 0;
         }
     }
+
+    /// <summary>Immutable cached payload for /api/dashboard/overview-cards.</summary>
+    private sealed record OverviewCardsCachedResult(
+        decimal TotalPendapatan,
+        decimal TotalPiutang,
+        decimal TotalHutang,
+        decimal TotalBeban,
+        DateTime CachedAtUtc);
 }
