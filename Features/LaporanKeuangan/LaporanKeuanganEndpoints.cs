@@ -30,7 +30,7 @@ public static class LaporanKeuanganEndpoints
         => $"laporan:neraca:{asOfDate}:" + string.Join("|", sortedKeys);
 
     private static string BuildArusKasCacheKey(IReadOnlyList<string> sortedKeys, string fromDate, string toDate)
-        => $"laporan:arus-kas:{fromDate}:{toDate}:" + string.Join("|", sortedKeys);
+        => $"laporan:arus-kas:v3:{fromDate}:{toDate}:" + string.Join("|", sortedKeys);
 
     private static SemaphoreSlim GetLock(string cacheKey)
         => _keyLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
@@ -454,7 +454,6 @@ public static class LaporanKeuanganEndpoints
             bool? debug,
             IAccurateService service,
             ICompanyAccessService access,
-            IMemoryCache cache,
             CancellationToken cancellationToken) =>
         {
             if (!DateOnly.TryParseExact(fromDate, "dd/MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var from))
@@ -474,101 +473,47 @@ public static class LaporanKeuanganEndpoints
 
             var keys = accessResult.AccurateCompanyKeys;
             var sortedKeys = keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
-            // maxIds affects results, so include it in the cache key
-            var cacheKey = BuildArusKasCacheKey(sortedKeys, fromDate, toDate) + (maxIds.HasValue ? $":max{maxIds}" : string.Empty);
 
-            // Fast path
-            if (cache.TryGetValue(cacheKey, out ArusKasCachedResult? akCached) && akCached is not null)
+            try
             {
+                var result = await CashFlowComputation.ComputeAsync(
+                    sortedKeys,
+                    from,
+                    to,
+                    service,
+                    cancellationToken,
+                    maxIds);
+
+                var months = result.Rows.Select(r => new
+                {
+                    month = r.Month,
+                    cashIn = r.CashIn,
+                    cashOut = r.CashOut,
+                    net = r.Net,
+                    cumulative = r.Cumulative,
+                }).ToList();
+
                 return Results.Json(new
                 {
                     s = true,
-                    fromDate = akCached.FromDate,
-                    toDate = akCached.ToDate,
+                    fromDate = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                    toDate = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                     companyScope = keys,
-                    totalCashIn = akCached.TotalCashIn,
-                    totalCashOut = akCached.TotalCashOut,
-                    netCashFlow = akCached.NetCashFlow,
-                    months = akCached.Months,
-                    fromCache = true,
+                    totalCashIn = result.TotalCashIn,
+                    totalCashOut = result.TotalCashOut,
+                    netCashFlow = result.NetCashFlow,
+                    months,
+                    fromCache = false,
+                    partial = false,
                 });
             }
-
-            var keyLock = GetLock(cacheKey);
-            await keyLock.WaitAsync(cancellationToken);
-            try
+            catch (OperationCanceledException)
             {
-                // Double-check
-                if (cache.TryGetValue(cacheKey, out akCached) && akCached is not null)
-                {
-                    return Results.Json(new
-                    {
-                        s = true,
-                        fromDate = akCached.FromDate,
-                        toDate = akCached.ToDate,
-                        companyScope = keys,
-                        totalCashIn = akCached.TotalCashIn,
-                        totalCashOut = akCached.TotalCashOut,
-                        netCashFlow = akCached.NetCashFlow,
-                        months = akCached.Months,
-                        fromCache = true,
-                    });
-                }
-
-                try
-                {
-                    var result = await CashFlowComputation.ComputeAsync(
-                        sortedKeys,
-                        from,
-                        to,
-                        service,
-                        cancellationToken,
-                        maxIds);
-
-                    var months = result.Rows.Select(r => new
-                    {
-                        month = r.Month,
-                        cashIn = r.CashIn,
-                        cashOut = r.CashOut,
-                        net = r.Net,
-                        cumulative = r.Cumulative,
-                    }).ToList();
-
-                    var akResult = new ArusKasCachedResult(
-                        FromDate: from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                        ToDate: to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                        TotalCashIn: result.TotalCashIn,
-                        TotalCashOut: result.TotalCashOut,
-                        NetCashFlow: result.NetCashFlow,
-                        Months: months);
-
-                    cache.Set(cacheKey, akResult, ReportCacheOptions());
-
-                    return Results.Json(new
-                    {
-                        s = true,
-                        fromDate = akResult.FromDate,
-                        toDate = akResult.ToDate,
-                        companyScope = keys,
-                        totalCashIn = akResult.TotalCashIn,
-                        totalCashOut = akResult.TotalCashOut,
-                        netCashFlow = akResult.NetCashFlow,
-                        months = akResult.Months,
-                        fromCache = false,
-                    });
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    return Results.Json(new { s = false, d = ex.Message }, statusCode: 500);
-                }
+                throw;
             }
-            finally
+            catch (Exception ex)
             {
-                keyLock.Release();
+                return Results.Json(new { s = false, d = ex.Message }, statusCode: 500);
             }
         })
             .RequireAuthorization()
