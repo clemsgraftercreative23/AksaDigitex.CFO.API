@@ -112,6 +112,10 @@ builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddSingleton<IAccurateCompanyKeyResolver, AccurateCompanyKeyResolver>();
 builder.Services.AddScoped<ICompanyAccessService, CompanyAccessService>();
 builder.Services.AddScoped<IUserAdminService, UserAdminService>();
+builder.Services.AddSingleton<ICashoutSyncQueue, CashoutSyncQueue>();
+builder.Services.AddScoped<ICashoutCacheService, CashoutCacheService>();
+// TEMP DISABLED: background cashout sync worker (cron-like behavior)
+// builder.Services.AddHostedService<CashoutSyncWorker>();
 
 // In-process cache (no Redis required) — used for Dashboard overview cards (5 min TTL)
 builder.Services.AddMemoryCache();

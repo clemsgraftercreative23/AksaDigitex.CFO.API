@@ -47,6 +47,11 @@ public class AccurateService : IAccurateService
         return await _client.GetOtherDepositListRaw(company);
     }
 
+    public async Task<string> GetOtherDepositListSummaryRaw(string? company = null)
+    {
+        return await _client.GetOtherDepositListSummaryRaw(company);
+    }
+
     public async Task<string> GetOtherDepositDetailRaw(string id, string? company = null)
     {
         return await _client.GetOtherDepositDetailRaw(id, company);
@@ -55,6 +60,11 @@ public class AccurateService : IAccurateService
     public async Task<string> GetOtherPaymentListRaw(string? company = null)
     {
         return await _client.GetOtherPaymentListRaw(company);
+    }
+
+    public async Task<string> GetOtherPaymentListSummaryRaw(string? company = null)
+    {
+        return await _client.GetOtherPaymentListSummaryRaw(company);
     }
 
     public async Task<string> GetOtherPaymentDetailRaw(string id, string? company = null)

@@ -77,31 +77,49 @@ internal static class CashFlowComputation
         CancellationToken cancellationToken,
         int maxIdsPerCompany)
     {
-        var listRaw = await service.GetOtherDepositListRaw(company);
-        var ids = ParseIdsFromList(listRaw, maxIdsPerCompany);
-        if (ids.Count == 0) return;
+        var listRaw = await service.GetOtherDepositListSummaryRaw(company);
+        var rows = ParseOtherDepositRowsFromList(listRaw, maxIdsPerCompany);
+        if (rows.Count == 0) return;
 
-        // Hitung SEMUA transaksi dalam rentang tanggal — tidak filter per approvalStatus.
-        // Sesuai spec sheet Accurate: semua penerimaan (other-deposit) dijumlahkan.
-        var allValidMonthly = new ConcurrentDictionary<string, decimal>(StringComparer.Ordinal);
-
-        await Parallel.ForEachAsync(
-            ids,
-            new ParallelOptions { MaxDegreeOfParallelism = MaxParallelism, CancellationToken = cancellationToken },
-            async (id, token) =>
-            {
-                string raw;
-                try { raw = await service.GetOtherDepositDetailRaw(id, company); } catch { return; }
-                if (!TryParseOtherDepositDetail(raw, out var transDate, out var amount, out _)) return;
-                if (transDate < fromDate || transDate > toDate) return;
-                var month = transDate.ToString("yyyy-MM", CultureInfo.InvariantCulture);
-                allValidMonthly.AddOrUpdate(month, amount, (_, prev) => prev + amount);
-            });
-
-        foreach (var (month, amount) in allValidMonthly)
+        foreach (var row in rows)
         {
-            monthMap.AddOrUpdate(month, (amount, 0m), (_, prev) => (prev.CashIn + amount, prev.CashOut));
+            if (!IsApprovedStatus(row.ApprovalStatus)) continue;
+            if (row.TransDate < fromDate || row.TransDate > toDate) continue;
+            var month = row.TransDate.ToString("yyyy-MM", CultureInfo.InvariantCulture);
+            monthMap.AddOrUpdate(month, (row.Amount, 0m), (_, prev) => (prev.CashIn + row.Amount, prev.CashOut));
         }
+    }
+
+    private sealed record OtherDepositSummaryRow(DateOnly TransDate, decimal Amount, string ApprovalStatus);
+
+    private static List<OtherDepositSummaryRow> ParseOtherDepositRowsFromList(string listRaw, int maxCount)
+    {
+        var result = new List<OtherDepositSummaryRow>(capacity: Math.Min(maxCount, 10000));
+        try
+        {
+            using var doc = JsonDocument.Parse(listRaw);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("d", out var d))
+                root = d;
+            if (root.ValueKind != JsonValueKind.Array)
+                return result;
+
+            foreach (var row in root.EnumerateArray())
+            {
+                if (result.Count >= maxCount) break;
+                if (row.ValueKind != JsonValueKind.Object) continue;
+                if (!TryReadDate(row, "transDate", out var transDate)) continue;
+                var amount = ReadDecimal(row, "amount");
+                if (amount <= 0m) continue;
+                var approvalStatus = ReadStatusLike(row, new[] { "approvalStatus", "status", "statusName" });
+                result.Add(new OtherDepositSummaryRow(transDate, amount, approvalStatus));
+            }
+        }
+        catch
+        {
+            // ignore parse failure
+        }
+        return result;
     }
 
     private static async Task AccumulateCashOutForCompany(
@@ -113,23 +131,49 @@ internal static class CashFlowComputation
         CancellationToken cancellationToken,
         int maxIdsPerCompany)
     {
-        var listRaw = await service.GetOtherPaymentListRaw(company);
-        var ids = ParseIdsFromList(listRaw, maxIdsPerCompany);
-        if (ids.Count == 0) return;
+        var listRaw = await service.GetOtherPaymentListSummaryRaw(company);
+        var rows = ParseOtherPaymentRowsFromList(listRaw, maxIdsPerCompany);
+        if (rows.Count == 0) return;
 
-        await Parallel.ForEachAsync(
-            ids,
-            new ParallelOptions { MaxDegreeOfParallelism = MaxParallelism, CancellationToken = cancellationToken },
-            async (id, token) =>
+        foreach (var row in rows)
+        {
+            if (!IsApprovedStatus(row.ApprovalStatus)) continue;
+            if (row.TransDate < fromDate || row.TransDate > toDate) continue;
+            var month = row.TransDate.ToString("yyyy-MM", CultureInfo.InvariantCulture);
+            monthMap.AddOrUpdate(month, (0m, row.Amount), (_, prev) => (prev.CashIn, prev.CashOut + row.Amount));
+        }
+    }
+
+    private sealed record OtherPaymentSummaryRow(DateOnly TransDate, decimal Amount, string ApprovalStatus);
+
+    private static List<OtherPaymentSummaryRow> ParseOtherPaymentRowsFromList(string listRaw, int maxCount)
+    {
+        var result = new List<OtherPaymentSummaryRow>(capacity: Math.Min(maxCount, 10000));
+        try
+        {
+            using var doc = JsonDocument.Parse(listRaw);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("d", out var d))
+                root = d;
+            if (root.ValueKind != JsonValueKind.Array)
+                return result;
+
+            foreach (var row in root.EnumerateArray())
             {
-                string raw;
-                try { raw = await service.GetOtherPaymentDetailRaw(id, company); } catch { return; }
-                if (!TryParseOtherPaymentDetail(raw, out var transDate, out var amount, out var approvalStatus)) return;
-                if (!IsApprovedStatus(approvalStatus)) return;
-                if (transDate < fromDate || transDate > toDate) return;
-                var month = transDate.ToString("yyyy-MM", CultureInfo.InvariantCulture);
-                monthMap.AddOrUpdate(month, (0m, amount), (_, prev) => (prev.CashIn, prev.CashOut + amount));
-            });
+                if (result.Count >= maxCount) break;
+                if (row.ValueKind != JsonValueKind.Object) continue;
+                if (!TryReadDate(row, "transDate", out var transDate)) continue;
+                var amount = ReadDecimal(row, "amount", "paymentAmount", "totalPayment");
+                if (amount <= 0m) continue;
+                var approvalStatus = ReadStatusLike(row, new[] { "approvalStatus", "status", "statusName" });
+                result.Add(new OtherPaymentSummaryRow(transDate, amount, approvalStatus));
+            }
+        }
+        catch
+        {
+            // ignore parse failure
+        }
+        return result;
     }
 
     private static List<string> ParseIdsFromList(string listRaw, int maxCount)
