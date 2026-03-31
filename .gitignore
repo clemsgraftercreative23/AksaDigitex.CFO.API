@@ -7,3 +7,5 @@ obj/
 *.cache
 *.log
 node_modules/
+appsettings.Development.json
+appsettings.Production.json
