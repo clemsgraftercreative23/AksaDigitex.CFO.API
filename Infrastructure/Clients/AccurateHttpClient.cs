@@ -288,6 +288,36 @@ public class AccurateHttpClient
         return await GetOtherDepositDetailRawByPath(id, "/accurate/api/other-deposit/detail.do", company);
     }
 
+    /// <summary>
+    /// Daftar pembayaran (cash out) dari other-payment untuk diproses detail.
+    /// </summary>
+    public async Task<string> GetOtherPaymentListRaw(string? company = null)
+    {
+        return await GetPagedIdListRaw("/accurate/api/other-payment/list.do", company);
+    }
+
+    /// <summary>
+    /// Detail pembayaran other-payment, ambil amount/transDate/approvalStatus.
+    /// </summary>
+    public async Task<string> GetOtherPaymentDetailRaw(string id, string? company = null)
+    {
+        var token = GetToken(company);
+        var signatureKey = _config["Accurate:SignatureKey"];
+        var host = GetHost(company);
+
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+        var signature = GenerateSignature(signatureKey, timestamp);
+        var url = $"{host}/accurate/api/other-payment/detail.do?id={Uri.EscapeDataString(id)}";
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("Authorization", $"Bearer {token}");
+        request.Headers.Add("X-Api-Timestamp", timestamp);
+        request.Headers.Add("X-Api-Signature", signature);
+
+        var response = await _httpClient.SendAsync(request);
+        return await response.Content.ReadAsStringAsync();
+    }
+
     private async Task<string> GetOtherDepositDetailRawByPath(string id, string endpointPath, string? company)
     {
         var token = GetToken(company);
@@ -386,7 +416,12 @@ public class AccurateHttpClient
 
             allIds.AddRange(idsThisPage);
 
-            if (idsThisPage.Count < pageSize)
+            var pageCount = ExtractPageCount(body);
+            if (pageCount.HasValue && page >= pageCount.Value)
+                break;
+
+            // Fallback jika metadata paging tidak tersedia.
+            if (!pageCount.HasValue && idsThisPage.Count < pageSize)
                 break;
         }
 
@@ -471,6 +506,29 @@ public class AccurateHttpClient
             };
             if (!string.IsNullOrWhiteSpace(id))
                 ids.Add(id);
+        }
+    }
+
+    private static int? ExtractPageCount(string raw)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            if (!doc.RootElement.TryGetProperty("sp", out var sp) || sp.ValueKind != JsonValueKind.Object)
+                return null;
+            if (!sp.TryGetProperty("pageCount", out var pageCountEl))
+                return null;
+
+            return pageCountEl.ValueKind switch
+            {
+                JsonValueKind.Number when pageCountEl.TryGetInt32(out var n) => n,
+                JsonValueKind.String when int.TryParse(pageCountEl.GetString(), out var n) => n,
+                _ => null
+            };
+        }
+        catch
+        {
+            return null;
         }
     }
 

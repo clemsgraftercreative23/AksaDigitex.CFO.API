@@ -30,7 +30,7 @@ public static class LaporanKeuanganEndpoints
         => $"laporan:neraca:{asOfDate}:" + string.Join("|", sortedKeys);
 
     private static string BuildArusKasCacheKey(IReadOnlyList<string> sortedKeys, string fromDate, string toDate)
-        => $"laporan:arus-kas:{fromDate}:{toDate}:" + string.Join("|", sortedKeys);
+        => $"laporan:arus-kas:v3:{fromDate}:{toDate}:" + string.Join("|", sortedKeys);
 
     private static SemaphoreSlim GetLock(string cacheKey)
         => _keyLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));

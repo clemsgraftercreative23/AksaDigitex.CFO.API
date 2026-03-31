@@ -20,9 +20,9 @@ internal sealed record CashFlowComputationResult(
 
 internal static class CashFlowComputation
 {
-    internal const int DefaultMaxIdsPerCompany = 5000;
+    internal const int DefaultMaxIdsPerCompany = 30000;
     internal const int MinMaxIdsPerCompany = 200;
-    internal const int MaxMaxIdsPerCompany = 5000;
+    internal const int MaxMaxIdsPerCompany = 30000;
     private const int MaxParallelism = 6;
 
     public static async Task<CashFlowComputationResult> ComputeAsync(
@@ -113,7 +113,7 @@ internal static class CashFlowComputation
         CancellationToken cancellationToken,
         int maxIdsPerCompany)
     {
-        var listRaw = await service.GetPurchaseInvoiceListRaw(company);
+        var listRaw = await service.GetOtherPaymentListRaw(company);
         var ids = ParseIdsFromList(listRaw, maxIdsPerCompany);
         if (ids.Count == 0) return;
 
@@ -123,12 +123,9 @@ internal static class CashFlowComputation
             async (id, token) =>
             {
                 string raw;
-                try { raw = await service.GetPurchaseInvoiceDetailRaw(id, company); } catch { return; }
-                if (!TryParsePurchaseInvoiceDetail(raw, out var transDate, out var amount, out var statusOutstanding, out var outstandingBalance)) return;
-                // Anggap lunas jika: statusOutstanding menandakan lunas ATAU sisa tagihan = 0
-                var settled = IsSettledStatus(statusOutstanding)
-                              || (outstandingBalance >= 0m && outstandingBalance == 0m);
-                if (!settled) return;
+                try { raw = await service.GetOtherPaymentDetailRaw(id, company); } catch { return; }
+                if (!TryParseOtherPaymentDetail(raw, out var transDate, out var amount, out var approvalStatus)) return;
+                if (!IsApprovedStatus(approvalStatus)) return;
                 if (transDate < fromDate || transDate > toDate) return;
                 var month = transDate.ToString("yyyy-MM", CultureInfo.InvariantCulture);
                 monthMap.AddOrUpdate(month, (0m, amount), (_, prev) => (prev.CashIn, prev.CashOut + amount));
@@ -231,31 +228,45 @@ internal static class CashFlowComputation
         string raw,
         out DateOnly transDate,
         out decimal purchaseAmount,
-        out string statusOutstanding,
-        out decimal outstandingBalance)
+        out string statusOutstanding)
     {
         transDate = default;
         purchaseAmount = 0m;
         statusOutstanding = "";
-        outstandingBalance = -1m; // -1 = tidak tersedia di response
         try
         {
             using var doc = JsonDocument.Parse(raw);
             if (!TryGetPayloadObject(doc.RootElement, out var d)) return false;
 
             if (!TryReadDate(d, "transDate", out transDate)) return false;
-
-            // Coba berbagai nama field amount yang dipakai Accurate
-            purchaseAmount = ReadDecimal(d, "purchaseAmount", "totalAmount", "amount");
-
+            purchaseAmount = ReadDecimal(d, "purchaseAmount");
             statusOutstanding = ReadStatusLike(d, new[] { "statusOutstanding", "status", "statusName" });
-
-            // Cek apakah ada field sisa tagihan — jika 0, sudah lunas
-            var balanceRaw = ReadDecimal(d, "totalBalance", "outstandingAmount", "remainingAmount", "balanceDue");
-            if (balanceRaw >= 0)
-                outstandingBalance = balanceRaw;
-
             return purchaseAmount > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryParseOtherPaymentDetail(
+        string raw,
+        out DateOnly transDate,
+        out decimal amount,
+        out string approvalStatus)
+    {
+        transDate = default;
+        amount = 0m;
+        approvalStatus = "";
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            if (!TryGetPayloadObject(doc.RootElement, out var d)) return false;
+
+            if (!TryReadDate(d, "transDate", out transDate)) return false;
+            amount = ReadDecimal(d, "amount", "paymentAmount", "totalPayment");
+            approvalStatus = ReadStatusLike(d, new[] { "approvalStatus", "status", "statusName" });
+            return amount > 0;
         }
         catch
         {
@@ -321,19 +332,10 @@ internal static class CashFlowComputation
 
     private static bool IsSettledStatus(string? raw)
     {
-        // null/empty → tidak ada sisa tagihan = sudah lunas di sebagian respon Accurate
-        if (string.IsNullOrWhiteSpace(raw)) return true;
+        if (string.IsNullOrWhiteSpace(raw)) return false;
         var s = raw.Trim().ToLowerInvariant();
-        // Nilai numerik/boolean yang berarti "tidak ada outstanding"
         if (s == "0" || s == "0.0" || s == "false") return true;
-        // Kata kunci status lunas dalam berbagai bahasa/format Accurate
-        if (s.Contains("lunas", StringComparison.Ordinal)) return true;
-        if (s.Contains("paid", StringComparison.Ordinal)) return true;
-        if (s.Contains("settled", StringComparison.Ordinal)) return true;
-        if (s.Contains("close", StringComparison.Ordinal)) return true; // CLOSED
-        if (s.Contains("done", StringComparison.Ordinal)) return true;
-        if (s.Contains("complete", StringComparison.Ordinal)) return true;
-        return false;
+        return s.Contains("lunas", StringComparison.Ordinal);
     }
 
     private static bool IsApprovedStatus(string? raw)
