@@ -81,7 +81,8 @@ internal static class CashFlowComputation
         var ids = ParseIdsFromList(listRaw, maxIdsPerCompany);
         if (ids.Count == 0) return;
 
-        var approvedMonthly = new ConcurrentDictionary<string, decimal>(StringComparer.Ordinal);
+        // Hitung SEMUA transaksi dalam rentang tanggal — tidak filter per approvalStatus.
+        // Sesuai spec sheet Accurate: semua penerimaan (other-deposit) dijumlahkan.
         var allValidMonthly = new ConcurrentDictionary<string, decimal>(StringComparer.Ordinal);
 
         await Parallel.ForEachAsync(
@@ -91,18 +92,13 @@ internal static class CashFlowComputation
             {
                 string raw;
                 try { raw = await service.GetOtherDepositDetailRaw(id, company); } catch { return; }
-                if (!TryParseOtherDepositDetail(raw, out var transDate, out var amount, out var approvalStatus)) return;
+                if (!TryParseOtherDepositDetail(raw, out var transDate, out var amount, out _)) return;
                 if (transDate < fromDate || transDate > toDate) return;
                 var month = transDate.ToString("yyyy-MM", CultureInfo.InvariantCulture);
                 allValidMonthly.AddOrUpdate(month, amount, (_, prev) => prev + amount);
-                if (IsApprovedStatus(approvalStatus))
-                    approvedMonthly.AddOrUpdate(month, amount, (_, prev) => prev + amount);
             });
 
-        var approvedTotal = approvedMonthly.Values.Sum();
-        var source = approvedTotal > 0 ? approvedMonthly : allValidMonthly;
-
-        foreach (var (month, amount) in source)
+        foreach (var (month, amount) in allValidMonthly)
         {
             monthMap.AddOrUpdate(month, (amount, 0m), (_, prev) => (prev.CashIn + amount, prev.CashOut));
         }
