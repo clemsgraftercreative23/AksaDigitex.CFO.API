@@ -23,8 +23,24 @@ public static class LaporanKeuanganEndpoints
     private static string BuildOverviewCacheKey(IReadOnlyList<string> sortedKeys)
         => "dashboard:overview:" + string.Join("|", sortedKeys);
 
+    private static string BuildLabaRugiCacheKey(IReadOnlyList<string> sortedKeys, string fromDate, string toDate)
+        => $"laporan:laba-rugi:{fromDate}:{toDate}:" + string.Join("|", sortedKeys);
+
+    private static string BuildNeracaCacheKey(IReadOnlyList<string> sortedKeys, string asOfDate)
+        => $"laporan:neraca:{asOfDate}:" + string.Join("|", sortedKeys);
+
+    private static string BuildArusKasCacheKey(IReadOnlyList<string> sortedKeys, string fromDate, string toDate)
+        => $"laporan:arus-kas:v3:{fromDate}:{toDate}:" + string.Join("|", sortedKeys);
+
     private static SemaphoreSlim GetLock(string cacheKey)
         => _keyLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
+
+    private static MemoryCacheEntryOptions ReportCacheOptions() => new()
+    {
+        AbsoluteExpirationRelativeToNow = CacheTtl,
+        SlidingExpiration = CacheTtl,
+        Priority = CacheItemPriority.Normal,
+    };
 
     private sealed record LabaRugiPdfRow(
         string AccountNo,
@@ -276,6 +292,7 @@ public static class LaporanKeuanganEndpoints
             string[]? company,
             IAccurateService service,
             ICompanyAccessService access,
+            IMemoryCache cache,
             CancellationToken cancellationToken) =>
         {
             var companyValues = company ?? Array.Empty<string>();
@@ -287,31 +304,57 @@ public static class LaporanKeuanganEndpoints
                 return Results.Json(new { error = accessResult.Error }, statusCode: accessResult.StatusCode);
 
             var keys = accessResult.AccurateCompanyKeys;
+            var sortedKeys = keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
+            var cacheKey = BuildLabaRugiCacheKey(sortedKeys, fromDate, toDate);
+
+            // Fast path
+            if (cache.TryGetValue(cacheKey, out LabaRugiCachedResult? lrCached) && lrCached is not null)
+                return lrCached.IsMulti
+                    ? Results.Json(new { s = true, companies = lrCached.Companies, fromCache = true })
+                    : Results.Content(lrCached.SingleJson!, "application/json");
+
+            var keyLock = GetLock(cacheKey);
+            await keyLock.WaitAsync(cancellationToken);
             try
             {
-                if (keys.Count >= 2)
+                // Double-check
+                if (cache.TryGetValue(cacheKey, out lrCached) && lrCached is not null)
+                    return lrCached.IsMulti
+                        ? Results.Json(new { s = true, companies = lrCached.Companies, fromCache = true })
+                        : Results.Content(lrCached.SingleJson!, "application/json");
+
+                try
                 {
-                    var companiesList = new List<object>();
-                    foreach (var companyName in keys)
+                    if (keys.Count >= 2)
                     {
-                        var rawJson = await service.GetPlAccountAmountRaw(fromDate, toDate, companyName);
-                        using var doc = JsonDocument.Parse(rawJson);
-                        var d = doc.RootElement.TryGetProperty("d", out var prop)
-                            ? prop.Clone()
-                            : JsonDocument.Parse("null").RootElement.Clone();
-                        companiesList.Add(new { companyName, data = d });
+                        var companiesList = new List<object>();
+                        foreach (var companyName in sortedKeys)
+                        {
+                            var rawJson = await service.GetPlAccountAmountRaw(fromDate, toDate, companyName);
+                            using var doc = JsonDocument.Parse(rawJson);
+                            var d = doc.RootElement.TryGetProperty("d", out var prop)
+                                ? prop.Clone()
+                                : JsonDocument.Parse("null").RootElement.Clone();
+                            companiesList.Add(new { companyName, data = d });
+                        }
+
+                        cache.Set(cacheKey, new LabaRugiCachedResult(IsMulti: true, Companies: companiesList, SingleJson: null), ReportCacheOptions());
+                        return Results.Json(new { s = true, companies = companiesList, fromCache = false });
                     }
 
-                    return Results.Json(new { s = true, companies = companiesList });
+                    var singleCompany = keys.Count == 1 ? keys[0] : null;
+                    var json = await service.GetPlAccountAmountRaw(fromDate, toDate, singleCompany);
+                    cache.Set(cacheKey, new LabaRugiCachedResult(IsMulti: false, Companies: null, SingleJson: json), ReportCacheOptions());
+                    return Results.Content(json, "application/json");
                 }
-
-                var singleCompany = keys.Count == 1 ? keys[0] : null;
-                var json = await service.GetPlAccountAmountRaw(fromDate, toDate, singleCompany);
-                return Results.Content(json, "application/json");
+                catch (Exception ex)
+                {
+                    return Results.Json(new { s = false, d = ex.Message }, statusCode: 500);
+                }
             }
-            catch (Exception ex)
+            finally
             {
-                return Results.Json(new { s = false, d = ex.Message }, statusCode: 500);
+                keyLock.Release();
             }
         })
             .RequireAuthorization()
@@ -374,6 +417,7 @@ public static class LaporanKeuanganEndpoints
             HttpRequest request,
             IAccurateService service,
             ICompanyAccessService access,
+            IMemoryCache cache,
             CancellationToken cancellationToken) =>
         {
             var companyValues = request.Query["company"].ToArray();
@@ -385,31 +429,57 @@ public static class LaporanKeuanganEndpoints
                 return Results.Json(new { error = accessResult.Error }, statusCode: accessResult.StatusCode);
 
             var keys = accessResult.AccurateCompanyKeys;
+            var sortedKeys = keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
+            var cacheKey = BuildNeracaCacheKey(sortedKeys, asOfDate);
+
+            // Fast path
+            if (cache.TryGetValue(cacheKey, out NeracaCachedResult? nCached) && nCached is not null)
+                return nCached.IsMulti
+                    ? Results.Json(new { s = true, companies = nCached.Companies, fromCache = true })
+                    : Results.Content(nCached.SingleJson!, "application/json");
+
+            var keyLock = GetLock(cacheKey);
+            await keyLock.WaitAsync(cancellationToken);
             try
             {
-                if (keys.Count >= 2)
+                // Double-check
+                if (cache.TryGetValue(cacheKey, out nCached) && nCached is not null)
+                    return nCached.IsMulti
+                        ? Results.Json(new { s = true, companies = nCached.Companies, fromCache = true })
+                        : Results.Content(nCached.SingleJson!, "application/json");
+
+                try
                 {
-                    var companiesList = new List<object>();
-                    foreach (var companyName in keys)
+                    if (keys.Count >= 2)
                     {
-                        var rawJson = await service.GetBsAccountAmountRaw(asOfDate, companyName);
-                        using var doc = JsonDocument.Parse(rawJson);
-                        var d = doc.RootElement.TryGetProperty("d", out var prop)
-                            ? prop.Clone()
-                            : JsonDocument.Parse("null").RootElement.Clone();
-                        companiesList.Add(new { companyName, data = d });
+                        var companiesList = new List<object>();
+                        foreach (var companyName in sortedKeys)
+                        {
+                            var rawJson = await service.GetBsAccountAmountRaw(asOfDate, companyName);
+                            using var doc = JsonDocument.Parse(rawJson);
+                            var d = doc.RootElement.TryGetProperty("d", out var prop)
+                                ? prop.Clone()
+                                : JsonDocument.Parse("null").RootElement.Clone();
+                            companiesList.Add(new { companyName, data = d });
+                        }
+
+                        cache.Set(cacheKey, new NeracaCachedResult(IsMulti: true, Companies: companiesList, SingleJson: null), ReportCacheOptions());
+                        return Results.Json(new { s = true, companies = companiesList, fromCache = false });
                     }
 
-                    return Results.Json(new { s = true, companies = companiesList });
+                    var singleCompany = keys.Count == 1 ? keys[0] : null;
+                    var json = await service.GetBsAccountAmountRaw(asOfDate, singleCompany);
+                    cache.Set(cacheKey, new NeracaCachedResult(IsMulti: false, Companies: null, SingleJson: json), ReportCacheOptions());
+                    return Results.Content(json, "application/json");
                 }
-
-                var singleCompany = keys.Count == 1 ? keys[0] : null;
-                var json = await service.GetBsAccountAmountRaw(asOfDate, singleCompany);
-                return Results.Content(json, "application/json");
+                catch (Exception ex)
+                {
+                    return Results.Json(new { s = false, d = ex.Message }, statusCode: 500);
+                }
             }
-            catch (Exception ex)
+            finally
             {
-                return Results.Json(new { s = false, d = ex.Message }, statusCode: 500);
+                keyLock.Release();
             }
         })
             .RequireAuthorization()
@@ -442,15 +512,26 @@ public static class LaporanKeuanganEndpoints
                 return Results.Json(new { error = accessResult.Error }, statusCode: accessResult.StatusCode);
 
             var keys = accessResult.AccurateCompanyKeys;
+            var sortedKeys = keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
+
             try
             {
                 var result = await CashFlowComputation.ComputeAsync(
-                    keys,
+                    sortedKeys,
                     from,
                     to,
                     service,
                     cancellationToken,
                     maxIds);
+
+                var months = result.Rows.Select(r => new
+                {
+                    month = r.Month,
+                    cashIn = r.CashIn,
+                    cashOut = r.CashOut,
+                    net = r.Net,
+                    cumulative = r.Cumulative,
+                }).ToList();
 
                 return Results.Json(new
                 {
@@ -461,14 +542,9 @@ public static class LaporanKeuanganEndpoints
                     totalCashIn = result.TotalCashIn,
                     totalCashOut = result.TotalCashOut,
                     netCashFlow = result.NetCashFlow,
-                    months = result.Rows.Select(r => new
-                    {
-                        month = r.Month,
-                        cashIn = r.CashIn,
-                        cashOut = r.CashOut,
-                        net = r.Net,
-                        cumulative = r.Cumulative,
-                    }),
+                    months,
+                    fromCache = false,
+                    partial = false,
                 });
             }
             catch (OperationCanceledException)
@@ -824,4 +900,25 @@ public static class LaporanKeuanganEndpoints
         decimal TotalHutang,
         decimal TotalBeban,
         DateTime CachedAtUtc);
+
+    /// <summary>Cached payload for /api/laporan-keuangan/laba-rugi.</summary>
+    private sealed record LabaRugiCachedResult(
+        bool IsMulti,
+        List<object>? Companies,
+        string? SingleJson);
+
+    /// <summary>Cached payload for /api/laporan-keuangan/neraca.</summary>
+    private sealed record NeracaCachedResult(
+        bool IsMulti,
+        List<object>? Companies,
+        string? SingleJson);
+
+    /// <summary>Cached payload for /api/laporan-keuangan/arus-kas.</summary>
+    private sealed record ArusKasCachedResult(
+        string FromDate,
+        string ToDate,
+        decimal TotalCashIn,
+        decimal TotalCashOut,
+        decimal NetCashFlow,
+        object Months);
 }

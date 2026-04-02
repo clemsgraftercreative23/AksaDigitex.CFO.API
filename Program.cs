@@ -17,6 +17,7 @@ using MyBackend.Features.Entitas;
 using MyBackend.Features.Root;
 using MyBackend.Features.SalesOrders;
 using MyBackend.Features.UtangPiutang;
+using MyBackend.Features.Notifications;
 using MyBackend.Features.Users;
 using MyBackend.Infrastructure.Clients;
 using MyBackend.Infrastructure.Persistence;
@@ -111,6 +112,10 @@ builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddSingleton<IAccurateCompanyKeyResolver, AccurateCompanyKeyResolver>();
 builder.Services.AddScoped<ICompanyAccessService, CompanyAccessService>();
 builder.Services.AddScoped<IUserAdminService, UserAdminService>();
+builder.Services.AddSingleton<ICashoutSyncQueue, CashoutSyncQueue>();
+builder.Services.AddScoped<ICashoutCacheService, CashoutCacheService>();
+// TEMP DISABLED: background cashout sync worker (cron-like behavior)
+// builder.Services.AddHostedService<CashoutSyncWorker>();
 
 // In-process cache (no Redis required) — used for Dashboard overview cards (5 min TTL)
 builder.Services.AddMemoryCache();
@@ -145,5 +150,6 @@ app.MapUtangPiutangEndpoints();
 app.MapEntitasEndpoints();
 app.MapLaporanKeuanganEndpoints();
 app.MapSalesOrdersEndpoints();
+app.MapNotificationsEndpoints();
 
 app.Run();

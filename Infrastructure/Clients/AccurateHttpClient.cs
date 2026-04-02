@@ -168,41 +168,24 @@ public class AccurateHttpClient
     }
 
     /// <summary>
-    /// Mengambil daftar Sales Order untuk Dashboard
+    /// Mengambil daftar Sales Order untuk Dashboard.
+    /// Harus memakai paging (sp.page / sp.pageSize) seperti salesorder_semuaentitas.py — tanpa itu Accurate sering mengembalikan d kosong atau hanya sebagian data.
     /// </summary>
     public async Task<string> GetSalesOrdersRaw(string? company = null)
     {
-        // 1. Ambil Kunci & Token (Alfa & Bitren pakai host iris, yang lain pakai default)
-        var token = GetToken(company);
-        var signatureKey = _config["Accurate:SignatureKey"];
         var host = GetHost(company);
+        const string fields = "id,number,transDate,customer,branch,totalAmount,status";
+        _logger.LogInformation(
+            "[Accurate] GetSalesOrdersRaw company={Company} host={Host} (paged /accurate/api/sales-order/list.do)",
+            company ?? "(default)",
+            host);
 
-        _logger.LogInformation("[Accurate] GetSalesOrdersRaw company={Company} host={Host}", company ?? "(default)", host);
-        Console.WriteLine($"GetSalesOrdersRaw company={company ?? "(default)"} host={host}");
-        // 2. Bikin Gembok (Signature)
-        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
-        var signature = GenerateSignature(signatureKey, timestamp);
+        var responseBody = await GetPagedListRaw("/accurate/api/sales-order/list.do", fields, company);
 
-        // 3. Tentukan URL dan Minta Kolom Spesifik
-        // Kita minta: id, nomor SO, tanggal, nama pelanggan, entitas/cabang, total nilai, dan status.
-        // Catatan: Nama field "branch" atau "outstandingAmount" mungkin perlu dicek lagi di response aslinya nanti.
-        var url = $"{host}/accurate/api/sales-order/list.do?fields=id,number,transDate,customer,branch,totalAmount,status";
-
-        // 4. Berangkatkan Kurir (Kirim Request)
-        var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Add("Authorization", $"Bearer {token}");
-        request.Headers.Add("X-Api-Timestamp", timestamp);
-        request.Headers.Add("X-Api-Signature", signature);
-
-        var response = await _httpClient.SendAsync(request);
-        var responseBody = await response.Content.ReadAsStringAsync();
-
-        // Log untuk debug: status, URL, dan response
-        _logger.LogInformation("[Accurate] GetSalesOrdersRaw Response Status={StatusCode} URL={Url}", response.StatusCode, url);
-        if (!response.IsSuccessStatusCode)
-            _logger.LogWarning("[Accurate] GetSalesOrdersRaw Error Body (first 500 chars): {Body}", responseBody.Length > 500 ? responseBody[..500] : responseBody);
-        else
-            _logger.LogInformation("[Accurate] GetSalesOrdersRaw Body length={Len} preview={Preview}", responseBody.Length, responseBody.Length > 200 ? responseBody[..200] + "..." : responseBody);
+        _logger.LogInformation(
+            "[Accurate] GetSalesOrdersRaw merged body length={Len} preview={Preview}",
+            responseBody.Length,
+            responseBody.Length > 200 ? responseBody[..200] + "..." : responseBody);
 
         return responseBody;
     }
@@ -267,12 +250,19 @@ public class AccurateHttpClient
     /// </summary>
     public async Task<string> GetOtherDepositListRaw(string? company = null)
     {
-        var primary = await GetPagedIdListRaw("/accurate/accurate/api/other-deposit/list.do", company);
-        if (ExtractIds(primary).Count > 0)
-            return primary;
-
-        // Fallback untuk instance host yang hanya butuh satu segmen "/accurate".
         return await GetPagedIdListRaw("/accurate/api/other-deposit/list.do", company);
+    }
+
+    /// <summary>
+    /// Daftar penerimaan (cash in) dari other-deposit beserta amount/transDate/approvalStatus.
+    /// Dipakai agar perhitungan cashin tidak perlu hit detail per-id.
+    /// </summary>
+    public async Task<string> GetOtherDepositListSummaryRaw(string? company = null)
+    {
+        return await GetPagedListRaw(
+            "/accurate/api/other-deposit/list.do",
+            "id,transDate,approvalStatus,amount",
+            company);
     }
 
     /// <summary>
@@ -280,12 +270,49 @@ public class AccurateHttpClient
     /// </summary>
     public async Task<string> GetOtherDepositDetailRaw(string id, string? company = null)
     {
-        var primary = await GetOtherDepositDetailRawByPath(id, "/accurate/accurate/api/other-deposit/detail.do", company);
-        if (LooksLikeValidDetail(primary))
-            return primary;
-
-        // Fallback untuk instance host yang hanya butuh satu segmen "/accurate".
         return await GetOtherDepositDetailRawByPath(id, "/accurate/api/other-deposit/detail.do", company);
+    }
+
+    /// <summary>
+    /// Daftar pembayaran (cash out) dari other-payment untuk diproses detail.
+    /// </summary>
+    public async Task<string> GetOtherPaymentListRaw(string? company = null)
+    {
+        return await GetPagedIdListRaw("/accurate/api/other-payment/list.do", company);
+    }
+
+    /// <summary>
+    /// Daftar pembayaran (cash out) dari other-payment beserta amount/transDate/approvalStatus.
+    /// Dipakai agar perhitungan cashout tidak perlu hit detail per-id.
+    /// </summary>
+    public async Task<string> GetOtherPaymentListSummaryRaw(string? company = null)
+    {
+        return await GetPagedListRaw(
+            "/accurate/api/other-payment/list.do",
+            "id,transDate,approvalStatus,amount",
+            company);
+    }
+
+    /// <summary>
+    /// Detail pembayaran other-payment, ambil amount/transDate/approvalStatus.
+    /// </summary>
+    public async Task<string> GetOtherPaymentDetailRaw(string id, string? company = null)
+    {
+        var token = GetToken(company);
+        var signatureKey = _config["Accurate:SignatureKey"];
+        var host = GetHost(company);
+
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+        var signature = GenerateSignature(signatureKey, timestamp);
+        var url = $"{host}/accurate/api/other-payment/detail.do?id={Uri.EscapeDataString(id)}";
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("Authorization", $"Bearer {token}");
+        request.Headers.Add("X-Api-Timestamp", timestamp);
+        request.Headers.Add("X-Api-Signature", signature);
+
+        var response = await _httpClient.SendAsync(request);
+        return await response.Content.ReadAsStringAsync();
     }
 
     private async Task<string> GetOtherDepositDetailRawByPath(string id, string endpointPath, string? company)
@@ -386,7 +413,12 @@ public class AccurateHttpClient
 
             allIds.AddRange(idsThisPage);
 
-            if (idsThisPage.Count < pageSize)
+            var pageCount = ExtractPageCount(body);
+            if (pageCount.HasValue && page >= pageCount.Value)
+                break;
+
+            // Fallback jika metadata paging tidak tersedia.
+            if (!pageCount.HasValue && idsThisPage.Count < pageSize)
                 break;
         }
 
@@ -404,6 +436,49 @@ public class AccurateHttpClient
         return JsonSerializer.Serialize(payload);
     }
 
+    private async Task<string> GetPagedListRaw(string endpointPath, string fields, string? company)
+    {
+        const int pageSize = 1000;
+        var allRows = new List<string>(capacity: pageSize);
+
+        for (var page = 1; page <= 2000; page++)
+        {
+            var token = GetToken(company);
+            var signatureKey = _config["Accurate:SignatureKey"];
+            var host = GetHost(company);
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+            var signature = GenerateSignature(signatureKey, timestamp);
+            var url = $"{host}{endpointPath}?fields={Uri.EscapeDataString(fields)}&sp.page={page}&sp.pageSize={pageSize}";
+
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Add("Authorization", $"Bearer {token}");
+            request.Headers.Add("X-Api-Timestamp", timestamp);
+            request.Headers.Add("X-Api-Signature", signature);
+
+            var response = await _httpClient.SendAsync(request);
+            var body = await response.Content.ReadAsStringAsync();
+            var rowsThisPage = ExtractRows(body);
+            if (rowsThisPage.Count == 0)
+                break;
+
+            allRows.AddRange(rowsThisPage);
+
+            var pageCount = ExtractPageCount(body);
+            if (pageCount.HasValue && page >= pageCount.Value)
+                break;
+            if (!pageCount.HasValue && rowsThisPage.Count < pageSize)
+                break;
+        }
+
+        if (allRows.Count == 0)
+        {
+            var single = await GetSingleListRawNoPagingWithFields(endpointPath, fields, company);
+            return single;
+        }
+
+        return $"{{\"s\":true,\"d\":[{string.Join(",", allRows)}]}}";
+    }
+
     private async Task<string> GetSingleListRawNoPaging(string endpointPath, string? company)
     {
         var token = GetToken(company);
@@ -412,6 +487,24 @@ public class AccurateHttpClient
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
         var signature = GenerateSignature(signatureKey, timestamp);
         var url = $"{host}{endpointPath}?fields=id";
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("Authorization", $"Bearer {token}");
+        request.Headers.Add("X-Api-Timestamp", timestamp);
+        request.Headers.Add("X-Api-Signature", signature);
+
+        var response = await _httpClient.SendAsync(request);
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    private async Task<string> GetSingleListRawNoPagingWithFields(string endpointPath, string fields, string? company)
+    {
+        var token = GetToken(company);
+        var signatureKey = _config["Accurate:SignatureKey"];
+        var host = GetHost(company);
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+        var signature = GenerateSignature(signatureKey, timestamp);
+        var url = $"{host}{endpointPath}?fields={Uri.EscapeDataString(fields)}";
 
         var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Add("Authorization", $"Bearer {token}");
@@ -471,6 +564,51 @@ public class AccurateHttpClient
             };
             if (!string.IsNullOrWhiteSpace(id))
                 ids.Add(id);
+        }
+    }
+
+    private static List<string> ExtractRows(string raw)
+    {
+        var rows = new List<string>();
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            if (!doc.RootElement.TryGetProperty("d", out var d) || d.ValueKind != JsonValueKind.Array)
+                return rows;
+
+            foreach (var el in d.EnumerateArray())
+            {
+                if (el.ValueKind == JsonValueKind.Object)
+                    rows.Add(el.GetRawText());
+            }
+        }
+        catch
+        {
+            // ignore parse failure for paging probe
+        }
+        return rows;
+    }
+
+    private static int? ExtractPageCount(string raw)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            if (!doc.RootElement.TryGetProperty("sp", out var sp) || sp.ValueKind != JsonValueKind.Object)
+                return null;
+            if (!sp.TryGetProperty("pageCount", out var pageCountEl))
+                return null;
+
+            return pageCountEl.ValueKind switch
+            {
+                JsonValueKind.Number when pageCountEl.TryGetInt32(out var n) => n,
+                JsonValueKind.String when int.TryParse(pageCountEl.GetString(), out var n) => n,
+                _ => null
+            };
+        }
+        catch
+        {
+            return null;
         }
     }
 
