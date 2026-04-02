@@ -1,7 +1,9 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Caching.Memory;
 using MyBackend.Application.Services;
 using System.Globalization;
 using QuestPDF.Fluent;
