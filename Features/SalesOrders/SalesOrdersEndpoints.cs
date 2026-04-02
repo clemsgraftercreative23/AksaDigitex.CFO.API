@@ -36,6 +36,35 @@ public static class SalesOrdersEndpoints
             .RequireAuthorization()
             .WithTags("Laporan Keuangan");
 
+        app.MapGet("/api/sales-orders/{id}", async (
+                string id,
+                ClaimsPrincipal user,
+                string? company,
+                AccurateHttpClient accurateClient,
+                ICompanyAccessService access,
+                CancellationToken cancellationToken) =>
+            {
+                var accessResult = await access.NormalizeAndAuthorizeAsync(
+                    user,
+                    company != null ? new[] { company } : Array.Empty<string?>(),
+                    cancellationToken);
+                if (!accessResult.Success)
+                    return Results.Json(new { error = accessResult.Error }, statusCode: accessResult.StatusCode);
+                var key = accessResult.AccurateCompanyKeys[0];
+
+                try
+                {
+                    var result = await accurateClient.GetSalesOrderDetailRaw(id, key);
+                    return Results.Content(result, "application/json");
+                }
+                catch (Exception ex)
+                {
+                    return Results.Problem(ex.Message);
+                }
+            })
+            .RequireAuthorization()
+            .WithTags("Laporan Keuangan");
+
         return app;
     }
 }

@@ -174,7 +174,7 @@ public class AccurateHttpClient
     public async Task<string> GetSalesOrdersRaw(string? company = null)
     {
         var host = GetHost(company);
-        const string fields = "id,number,transDate,customer,branch,totalAmount,status";
+        const string fields = "id,number,transDate,customer,branch,totalAmount,status,contractNo,contractDate,contractCategory";
         _logger.LogInformation(
             "[Accurate] GetSalesOrdersRaw company={Company} host={Host} (paged /accurate/api/sales-order/list.do)",
             company ?? "(default)",
@@ -188,6 +188,29 @@ public class AccurateHttpClient
             responseBody.Length > 200 ? responseBody[..200] + "..." : responseBody);
 
         return responseBody;
+    }
+
+    /// <summary>
+    /// Detail satu sales order (contractNo, transDate, itemType, contractValue, dll.).
+    /// </summary>
+    public async Task<string> GetSalesOrderDetailRaw(string id, string? company = null)
+    {
+        var token = GetToken(company);
+        var signatureKey = _config["Accurate:SignatureKey"];
+        var host = GetHost(company);
+
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+        var signature = GenerateSignature(signatureKey, timestamp);
+
+        var url = $"{host}/accurate/api/sales-order/detail.do?id={Uri.EscapeDataString(id)}";
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("Authorization", $"Bearer {token}");
+        request.Headers.Add("X-Api-Timestamp", timestamp);
+        request.Headers.Add("X-Api-Signature", signature);
+
+        var response = await _httpClient.SendAsync(request);
+        return await response.Content.ReadAsStringAsync();
     }
 
     /// <summary>
