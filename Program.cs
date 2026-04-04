@@ -16,6 +16,7 @@ using MyBackend.Features.Lookup;
 using MyBackend.Features.Entitas;
 using MyBackend.Features.Root;
 using MyBackend.Features.SalesOrders;
+using MyBackend.Features.PurchaseOrders;
 using MyBackend.Features.UtangPiutang;
 using MyBackend.Features.Notifications;
 using MyBackend.Features.Users;
@@ -150,6 +151,7 @@ app.MapUtangPiutangEndpoints();
 app.MapEntitasEndpoints();
 app.MapLaporanKeuanganEndpoints();
 app.MapSalesOrdersEndpoints();
+app.MapPurchaseOrdersEndpoints();
 app.MapNotificationsEndpoints();
 
 app.Run();
