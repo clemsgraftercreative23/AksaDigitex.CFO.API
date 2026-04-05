@@ -44,6 +44,16 @@ public static class PurchaseOrdersEndpoints
                             description = r.Description,
                             statusName = r.StatusName,
                             totalAmount = r.TotalAmount,
+                            detailItems = r.DetailItems.Select(d => new
+                            {
+                                name = d.Name,
+                                itemCode = d.ItemCode,
+                                quantity = d.Quantity,
+                                unit = d.Unit,
+                                unitPrice = d.UnitPrice,
+                                discount = d.Discount,
+                                totalPrice = d.TotalPrice,
+                            }),
                         }));
                     }
 

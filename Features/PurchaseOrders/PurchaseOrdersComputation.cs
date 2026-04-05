@@ -14,7 +14,17 @@ internal sealed record PurchaseOrderRow(
     string Name,
     string Description,
     string StatusName,
-    decimal TotalAmount);
+    decimal TotalAmount,
+    IReadOnlyList<PurchaseOrderLineRow> DetailItems);
+
+internal sealed record PurchaseOrderLineRow(
+    string Name,
+    string ItemCode,
+    decimal Quantity,
+    string Unit,
+    decimal UnitPrice,
+    decimal Discount,
+    decimal TotalPrice);
 
 internal static class PurchaseOrdersComputation
 {
@@ -63,7 +73,8 @@ internal static class PurchaseOrdersComputation
                     detail.Name,
                     detail.Description,
                     detail.StatusName,
-                    detail.TotalAmount));
+                    detail.TotalAmount,
+                    detail.DetailItems));
             });
 
         return rows
@@ -133,6 +144,7 @@ internal static class PurchaseOrdersComputation
         public string Description { get; init; } = "-";
         public string StatusName { get; init; } = "-";
         public decimal TotalAmount { get; init; }
+        public IReadOnlyList<PurchaseOrderLineRow> DetailItems { get; init; } = Array.Empty<PurchaseOrderLineRow>();
     }
 
     private static bool TryParsePurchaseInvoiceDetail(string raw, out PurchaseInvoiceDetailDto detail)
@@ -170,6 +182,8 @@ internal static class PurchaseOrdersComputation
                 ?? GetDecimal(d, "purchaseAmount")
                 ?? 0m;
 
+            var detailItems = ParseDetailItems(d);
+
             detail = new PurchaseInvoiceDetailDto
             {
                 Id = id,
@@ -180,6 +194,7 @@ internal static class PurchaseOrdersComputation
                 Description = description,
                 StatusName = statusName,
                 TotalAmount = totalAmount,
+                DetailItems = detailItems,
             };
             return true;
         }
@@ -187,6 +202,79 @@ internal static class PurchaseOrdersComputation
         {
             return false;
         }
+    }
+
+    private static IReadOnlyList<PurchaseOrderLineRow> ParseDetailItems(JsonElement detail)
+    {
+        foreach (var propName in new[] { "detailItem", "items", "details", "detailItems" })
+        {
+            if (!detail.TryGetProperty(propName, out var arr) || arr.ValueKind != JsonValueKind.Array)
+                continue;
+
+            var lines = new List<PurchaseOrderLineRow>();
+            foreach (var item in arr.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var name =
+                    GetNestedStringOrNumber(item, "item", "name")
+                    ?? GetStringOrNumber(item, "detailName")
+                    ?? GetStringOrNumber(item, "name")
+                    ?? "-";
+
+                var itemCode =
+                    GetNestedStringOrNumber(item, "item", "no")
+                    ?? GetNestedStringOrNumber(item, "item", "code")
+                    ?? GetStringOrNumber(item, "itemNo")
+                    ?? GetStringOrNumber(item, "itemCode")
+                    ?? "-";
+
+                var quantity =
+                    GetDecimal(item, "quantity")
+                    ?? GetDecimal(item, "qty")
+                    ?? GetDecimal(item, "unitQuantity")
+                    ?? 0m;
+
+                var unit =
+                    GetNestedStringOrNumber(item, "itemUnit", "name")
+                    ?? GetNestedStringOrNumber(item, "unit", "name")
+                    ?? GetStringOrNumber(item, "unit")
+                    ?? "-";
+
+                var unitPrice =
+                    GetDecimal(item, "unitPrice")
+                    ?? GetDecimal(item, "price")
+                    ?? GetDecimal(item, "itemUnitPrice")
+                    ?? GetDecimal(item, "pricePerUnit")
+                    ?? 0m;
+
+                var discount =
+                    GetDecimal(item, "discount")
+                    ?? GetDecimal(item, "discountAmount")
+                    ?? 0m;
+
+                var totalPrice =
+                    GetDecimal(item, "totalUnitPrice")
+                    ?? GetDecimal(item, "totalAmount")
+                    ?? GetDecimal(item, "amount")
+                    ?? GetDecimal(item, "lineTotal")
+                    ?? Math.Max((quantity * unitPrice) - discount, 0m);
+
+                lines.Add(new PurchaseOrderLineRow(
+                    name,
+                    itemCode,
+                    quantity,
+                    unit,
+                    unitPrice,
+                    discount,
+                    totalPrice));
+            }
+
+            return lines;
+        }
+
+        return Array.Empty<PurchaseOrderLineRow>();
     }
 
     private static string? GetStringOrNumber(JsonElement obj, string prop)
