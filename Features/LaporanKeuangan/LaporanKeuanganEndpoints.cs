@@ -14,7 +14,7 @@ namespace MyBackend.Features.LaporanKeuangan;
 
 public static class LaporanKeuanganEndpoints
 {
-    private static readonly string[] DashboardOverviewCoaNos = ["4101", "1103", "2101", "2102", "2103", "5100", "6100", "6200", "6300"];
+    private static readonly string[] DashboardOverviewCoaNos = ["4101", "1103", "2101", "2102", "2103", "5100", "6100", "6200"];
 
     // Cache TTL: 5 minutes absolute, 5 minutes sliding (whichever fires first)
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
@@ -792,7 +792,6 @@ public static class LaporanKeuanganEndpoints
                                     case "5100":
                                     case "6100":
                                     case "6200":
-                                    case "6300":
                                         beban += balance;
                                         break;
                                 }
