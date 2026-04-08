@@ -14,7 +14,7 @@ namespace MyBackend.Features.LaporanKeuangan;
 
 public static class LaporanKeuanganEndpoints
 {
-    private static readonly string[] DashboardOverviewCoaNos = ["4101", "1103", "2101", "2102", "2103", "5100", "6100", "6200"];
+    private static readonly string[] DashboardOverviewCoaNos = ["1103", "2101", "2102", "2103"];
 
     // Cache TTL: 5 minutes absolute, 5 minutes sliding (whichever fires first)
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
@@ -22,8 +22,30 @@ public static class LaporanKeuanganEndpoints
     // One semaphore per cache key to prevent thundering-herd / cache stampede
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _keyLocks = new();
 
-    private static string BuildOverviewCacheKey(IReadOnlyList<string> sortedKeys)
-        => "dashboard:overview:" + string.Join("|", sortedKeys);
+    private static string BuildOverviewCacheKey(IReadOnlyList<string> sortedKeys, string asOfDateIso)
+        => $"dashboard:overview:{asOfDateIso}:" + string.Join("|", sortedKeys);
+
+    private static string NormalizeDashboardAsOfDate(string? asOfDate)
+    {
+        if (!string.IsNullOrWhiteSpace(asOfDate))
+        {
+            if (DateOnly.TryParseExact(asOfDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var iso))
+                return iso.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            if (DateOnly.TryParseExact(asOfDate, "dd/MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dmy))
+                return dmy.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        }
+
+        return DateOnly.FromDateTime(DateTime.Today).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    }
+
+    private static (string FromDate, string ToDate) BuildDashboardPlPeriod(string asOfDateIso)
+    {
+        var asOf = DateOnly.ParseExact(asOfDateIso, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var from = new DateOnly(asOf.Year, 1, 1);
+        return (
+            from.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture),
+            asOf.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture));
+    }
 
     private static string BuildLabaRugiCacheKey(IReadOnlyList<string> sortedKeys, string fromDate, string toDate)
         => $"laporan:laba-rugi:{fromDate}:{toDate}:" + string.Join("|", sortedKeys);
@@ -50,7 +72,8 @@ public static class LaporanKeuanganEndpoints
         bool IsParent,
         string ParentNo,
         decimal Amount,
-        int Lvl
+        int Lvl,
+        string AccountType
     );
 
     private static readonly string[] LabaRugiParentOrder =
@@ -127,8 +150,9 @@ public static class LaporanKeuanganEndpoints
             var amount = Dec(item, "amount");
             var lvl = Int(item, "lvl");
             var isParent = Bool(item, "isParent");
+            var accountType = Str(item, "accountType");
 
-            rows.Add(new LabaRugiPdfRow(accountNo, accountName, isParent, parentNo, amount, lvl));
+            rows.Add(new LabaRugiPdfRow(accountNo, accountName, isParent, parentNo, amount, lvl, accountType));
         }
 
         return rows;
@@ -136,6 +160,25 @@ public static class LaporanKeuanganEndpoints
 
     private static decimal GetParentAmount(List<LabaRugiPdfRow> rows, string parentNo)
         => rows.FirstOrDefault(r => r.IsParent && r.AccountNo == parentNo)?.Amount ?? 0m;
+
+    private static decimal CalculateLabaBersihFromParentRows(List<LabaRugiPdfRow> rows)
+    {
+        static decimal SignFromAccountType(string accountType)
+            => accountType.ToUpperInvariant() switch
+            {
+                "REVENUE" => 1m,
+                "OTHER_INCOME" => 1m,
+                "COST_OF_GOOD_SOLD" => -1m,
+                "EXPENSE" => -1m,
+                "OTHER_EXPENSE" => -1m,
+                _ => 0m,
+            };
+
+        // Keep all parent groups by account type, but exclude 7200 and 7300.
+        return rows
+            .Where(r => r.IsParent && r.AccountNo != "7200" && r.AccountNo != "7300")
+            .Sum(r => SignFromAccountType(r.AccountType) * r.Amount);
+    }
 
     private const string GroupLetterheadLogoFileName = "AKARSA HEKSA BERSAUDARA LOGO.png";
 
@@ -689,6 +732,7 @@ public static class LaporanKeuanganEndpoints
         app.MapGet("/api/dashboard/overview-cards", async (
             ClaimsPrincipal user,
             string[]? company,
+            string? asOfDate,
             IAccurateService service,
             ICompanyAccessService access,
             IMemoryCache cache,
@@ -705,7 +749,9 @@ public static class LaporanKeuanganEndpoints
             // Build a deterministic cache key from sorted authorized company names
             var keys = accessResult.AccurateCompanyKeys;
             var sortedKeys = keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
-            var cacheKey = BuildOverviewCacheKey(sortedKeys);
+            var asOfDateIso = NormalizeDashboardAsOfDate(asOfDate);
+            var cacheKey = BuildOverviewCacheKey(sortedKeys, asOfDateIso);
+            var (fromDatePl, toDatePl) = BuildDashboardPlPeriod(asOfDateIso);
 
             // Fast path — data already in cache
             if (cache.TryGetValue(cacheKey, out OverviewCardsCachedResult? cached) && cached is not null)
@@ -717,7 +763,7 @@ public static class LaporanKeuanganEndpoints
                     cached.TotalPendapatan,
                     cached.TotalPiutang,
                     cached.TotalHutang,
-                    labaBersih = cached.TotalPendapatan - cached.TotalBeban,
+                    labaBersih = cached.TotalLabaBersih,
                     fromCache = true,
                     cachedAtUtc = cached.CachedAtUtc,
                 });
@@ -738,7 +784,7 @@ public static class LaporanKeuanganEndpoints
                         cached.TotalPendapatan,
                         cached.TotalPiutang,
                         cached.TotalHutang,
-                        labaBersih = cached.TotalPendapatan - cached.TotalBeban,
+                        labaBersih = cached.TotalLabaBersih,
                         fromCache = true,
                         cachedAtUtc = cached.CachedAtUtc,
                     });
@@ -748,6 +794,9 @@ public static class LaporanKeuanganEndpoints
                 decimal totalPiutang = 0m;
                 decimal totalHutang = 0m;
                 decimal totalBeban = 0m;
+                decimal totalPendapatanLain = 0m;
+                decimal totalBebanLain = 0m;
+                decimal totalLabaBersih = 0m;
                 var gate = new object();
 
                 try
@@ -761,6 +810,35 @@ public static class LaporanKeuanganEndpoints
                             decimal piutang = 0m;
                             decimal hutang = 0m;
                             decimal beban = 0m;
+                            decimal pendapatanLain = 0m;
+                            decimal bebanLain = 0m;
+                            decimal labaBersih = 0m;
+
+                            try
+                            {
+                                var plRaw = await service.GetPlAccountAmountRaw(fromDatePl, toDatePl, companyName);
+                                using var plDoc = JsonDocument.Parse(plRaw);
+                                if (plDoc.RootElement.TryGetProperty("d", out var d) && d.ValueKind == JsonValueKind.Array)
+                                {
+                                    var rows = ParseLabaRugiRows(d);
+                                    pendapatan = GetParentAmount(rows, "4101");
+                                    beban =
+                                        GetParentAmount(rows, "5100")
+                                        + GetParentAmount(rows, "6100")
+                                        + GetParentAmount(rows, "6200")
+                                        + GetParentAmount(rows, "6300");
+                                    pendapatanLain = GetParentAmount(rows, "7100");
+                                    bebanLain =
+                                        GetParentAmount(rows, "8100")
+                                        + GetParentAmount(rows, "8200")
+                                        + GetParentAmount(rows, "8300");
+                                    labaBersih = CalculateLabaBersihFromParentRows(rows);
+                                }
+                            }
+                            catch
+                            {
+                                // Keep partial result behavior consistent with existing resilient overview endpoint.
+                            }
 
                             foreach (var coaNo in DashboardOverviewCoaNos)
                             {
@@ -789,11 +867,6 @@ public static class LaporanKeuanganEndpoints
                                     case "2103":
                                         hutang += balance;
                                         break;
-                                    case "5100":
-                                    case "6100":
-                                    case "6200":
-                                        beban += balance;
-                                        break;
                                 }
                             }
 
@@ -803,6 +876,9 @@ public static class LaporanKeuanganEndpoints
                                 totalPiutang += piutang;
                                 totalHutang += hutang;
                                 totalBeban += beban;
+                                totalPendapatanLain += pendapatanLain;
+                                totalBebanLain += bebanLain;
+                                totalLabaBersih += labaBersih;
                             }
                         });
 
@@ -811,6 +887,9 @@ public static class LaporanKeuanganEndpoints
                         TotalPiutang: totalPiutang,
                         TotalHutang: totalHutang,
                         TotalBeban: totalBeban,
+                        TotalPendapatanLain: totalPendapatanLain,
+                        TotalBebanLain: totalBebanLain,
+                        TotalLabaBersih: totalLabaBersih,
                         CachedAtUtc: DateTime.UtcNow);
 
                     cache.Set(cacheKey, result, new MemoryCacheEntryOptions()
@@ -827,7 +906,7 @@ public static class LaporanKeuanganEndpoints
                         totalPendapatan,
                         totalPiutang,
                         totalHutang,
-                        labaBersih = totalPendapatan - totalBeban,
+                        labaBersih = totalLabaBersih,
                         fromCache = false,
                     });
                 }
@@ -900,6 +979,9 @@ public static class LaporanKeuanganEndpoints
         decimal TotalPiutang,
         decimal TotalHutang,
         decimal TotalBeban,
+        decimal TotalPendapatanLain,
+        decimal TotalBebanLain,
+        decimal TotalLabaBersih,
         DateTime CachedAtUtc);
 
     /// <summary>Cached payload for /api/laporan-keuangan/laba-rugi.</summary>
