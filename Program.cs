@@ -64,6 +64,7 @@ builder.Services.AddDbContext<CfoDbContext>(options =>
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
 builder.Services.Configure<CorsOptions>(builder.Configuration.GetSection(CorsOptions.SectionName));
 builder.Services.Configure<CompanyAliasOptions>(builder.Configuration.GetSection(CompanyAliasOptions.SectionName));
+builder.Services.Configure<EmailOptions>(builder.Configuration.GetSection(EmailOptions.SectionName));
 
 var jwt = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? new JwtOptions();
 if (string.IsNullOrWhiteSpace(jwt.SigningKey) || jwt.SigningKey.Length < 32)
@@ -113,6 +114,7 @@ builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddSingleton<IAccurateCompanyKeyResolver, AccurateCompanyKeyResolver>();
 builder.Services.AddScoped<ICompanyAccessService, CompanyAccessService>();
 builder.Services.AddScoped<IUserAdminService, UserAdminService>();
+builder.Services.AddScoped<IEmailService, SmtpEmailService>();
 builder.Services.AddSingleton<ICashoutSyncQueue, CashoutSyncQueue>();
 builder.Services.AddScoped<ICashoutCacheService, CashoutCacheService>();
 // TEMP DISABLED: background cashout sync worker (cron-like behavior)
