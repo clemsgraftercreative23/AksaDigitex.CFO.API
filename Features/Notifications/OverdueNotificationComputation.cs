@@ -21,6 +21,8 @@ public sealed record OverdueNotificationDto
     public required string InvoiceNumber { get; init; }
     public required decimal TotalAmount { get; init; }
     public required string EntityName { get; init; }
+    public string? CounterpartyName { get; init; }
+    public string? DueDate { get; init; }
     public required int DaysPastDue { get; init; }
     /// <summary>The threshold that was crossed: 31, 61, or 91.</summary>
     public required int AgingBucket { get; init; }
@@ -107,6 +109,8 @@ public static class OverdueNotificationComputation
                         InvoiceNumber = invoiceNumber,
                         TotalAmount = detail.TotalAmount,
                         EntityName = companyKey,
+                        CounterpartyName = null,
+                        DueDate = transDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                         DaysPastDue = days,
                         AgingBucket = bucket.Value,
                         CreatedAt = DateTime.UtcNow,
@@ -191,6 +195,8 @@ public static class OverdueNotificationComputation
                         InvoiceNumber = invoiceNumber,
                         TotalAmount = detail.PurchaseAmount,
                         EntityName = companyKey,
+                        CounterpartyName = vendorName,
+                        DueDate = dueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                         DaysPastDue = days,
                         AgingBucket = bucket.Value,
                         CreatedAt = DateTime.UtcNow,
