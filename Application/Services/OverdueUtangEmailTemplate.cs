@@ -26,67 +26,64 @@ public static class OverdueUtangEmailTemplate
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{BuildSubject(item)}}</title>
 </head>
-<body style="margin:0;padding:0;background:#f0f2f4;font-family:Arial,Helvetica,sans-serif;color:#2d3748;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f0f2f4;padding:20px 0;">
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#374151;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:18px 0;background:#f3f4f6;">
     <tr>
       <td align="center">
-        <table role="presentation" width="620" cellpadding="0" cellspacing="0" style="width:620px;max-width:620px;background:#ffffff;border:1px solid #d9dee5;">
+        <table role="presentation" width="760" cellpadding="0" cellspacing="0" style="width:760px;max-width:760px;background:#ffffff;border:1px solid #e5e7eb;">
           <tr>
-            <td style="background:#d9534f;color:#ffffff;padding:14px 18px;font-weight:700;font-size:21px;">
+            <td style="background:#d9534f;color:#ffffff;padding:14px 22px;">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
                 <tr>
-                  <td style="font-size:22px;font-weight:700;">PERINGATAN JATUH TEMPO: H+{{item.DaysPastDue}}</td>
-                  <td align="right" style="font-size:20px;font-weight:700;">{{nowText}}</td>
+                  <td style="font-size:16px;font-weight:700;">PERINGATAN JATUH TEMPO: H+{{item.DaysPastDue}}</td>
+                  <td align="right" style="font-size:15px;font-weight:700;">{{nowText}}</td>
                 </tr>
               </table>
             </td>
           </tr>
           <tr>
-            <td style="padding:34px 30px 18px 30px;">
-              <h1 style="margin:0 0 10px 0;text-align:center;font-size:46px;line-height:1.2;color:#2c3e50;">Dashboard CFO</h1>
-              <p style="margin:0 0 28px 0;text-align:center;font-size:31px;color:#9aa4af;">Sistem Otomatisasi Pembayaran (Bunga/Prioritas)</p>
-              <p style="margin:0 0 22px 0;font-size:34px;line-height:1.4;">Yth. Tim Finance &amp; Direksi,</p>
-              <p style="margin:0 0 26px 0;font-size:38px;line-height:1.5;">Kami menginformasikan bahwa terdapat dokumen tagihan masuk yang sudah melewati jatuh tempo. Mohon periksa rincian di bawah ini untuk tindak lanjut.</p>
+            <td style="padding:30px 38px 24px 38px;">
+              <h1 style="margin:0 0 6px 0;text-align:center;font-size:52px;line-height:1.1;color:#1f2937;">Dashboard CFO</h1>
+              <p style="margin:0 0 28px 0;text-align:center;font-size:16px;color:#9ca3af;">Sistem Otomatisasi Pembayaran (Bunga/Prioritas)</p>
+              <p style="margin:0 0 14px 0;font-size:18px;line-height:1.6;">Yth. Tim Finance &amp; Direksi,</p>
+              <p style="margin:0 0 24px 0;font-size:18px;line-height:1.7;">Kami menginformasikan bahwa terdapat dokumen tagihan masuk yang sudah melewati jatuh tempo. Mohon periksa rincian di bawah ini untuk tindak lanjut.</p>
 
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e1e5ea;border-radius:6px;overflow:hidden;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
                 <tr>
-                  <td style="padding:16px 18px;font-size:31px;color:#6b7280;width:40%;border-bottom:1px solid #e9edf2;">Entitas:</td>
-                  <td style="padding:16px 18px;font-size:32px;font-weight:700;border-bottom:1px solid #e9edf2;color:#2d3a4a;">{{Escape(item.EntityName)}}</td>
+                  <td style="padding:14px 18px;font-size:16px;color:#6b7280;width:40%;border-bottom:1px solid #eef2f7;">Entitas:</td>
+                  <td style="padding:14px 18px;font-size:16px;font-weight:700;color:#1f2937;border-bottom:1px solid #eef2f7;">{{Escape(item.EntityName)}}</td>
                 </tr>
                 <tr>
-                  <td style="padding:16px 18px;font-size:31px;color:#6b7280;width:40%;border-bottom:1px solid #e9edf2;">Jenis Tagihan:</td>
-                  <td style="padding:16px 18px;font-size:32px;font-weight:700;border-bottom:1px solid #e9edf2;color:#2d3a4a;">Utang</td>
+                  <td style="padding:14px 18px;font-size:16px;color:#6b7280;width:40%;border-bottom:1px solid #eef2f7;">Jenis Tagihan:</td>
+                  <td style="padding:14px 18px;font-size:16px;font-weight:700;color:#1f2937;border-bottom:1px solid #eef2f7;">Utang</td>
                 </tr>
                 <tr>
-                  <td style="padding:16px 18px;font-size:31px;color:#6b7280;width:40%;border-bottom:1px solid #e9edf2;">Vendor:</td>
-                  <td style="padding:16px 18px;font-size:32px;font-weight:700;border-bottom:1px solid #e9edf2;color:#2d3a4a;">{{Escape(counterparty)}}</td>
+                  <td style="padding:14px 18px;font-size:16px;color:#6b7280;width:40%;border-bottom:1px solid #eef2f7;">Bank Terkait:</td>
+                  <td style="padding:14px 18px;font-size:16px;font-weight:700;color:#1f2937;border-bottom:1px solid #eef2f7;">{{Escape(counterparty)}}</td>
                 </tr>
                 <tr>
-                  <td style="padding:16px 18px;font-size:31px;color:#6b7280;width:40%;border-bottom:1px solid #e9edf2;">Jatuh Tempo:</td>
-                  <td style="padding:16px 18px;font-size:32px;font-weight:700;border-bottom:1px solid #e9edf2;color:#d9534f;">{{Escape(dueDateText)}}</td>
+                  <td style="padding:14px 18px;font-size:16px;color:#6b7280;width:40%;border-bottom:1px solid #eef2f7;">Jatuh Tempo:</td>
+                  <td style="padding:14px 18px;font-size:16px;font-weight:700;color:#d9534f;border-bottom:1px solid #eef2f7;">{{Escape(dueDateText)}}</td>
                 </tr>
                 <tr>
-                  <td style="padding:16px 18px;font-size:31px;color:#6b7280;width:40%;">Total Tagihan:</td>
-                  <td style="padding:16px 18px;font-size:37px;font-weight:800;color:#2d3a4a;">{{Escape(nominal)}}</td>
+                  <td style="padding:14px 18px;font-size:16px;color:#6b7280;width:40%;">Total Tagihan:</td>
+                  <td style="padding:14px 18px;font-size:18px;font-weight:800;color:#1f2937;">{{Escape(nominal)}}</td>
                 </tr>
               </table>
 
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:30px;border:2px dashed #d3d8df;border-radius:8px;background:#fafbfc;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:26px;border:2px dashed #d1d5db;border-radius:10px;background:#fafafa;">
                 <tr>
-                  <td align="center" style="padding:36px 20px;">
-                    <div style="font-size:60px;line-height:1;margin-bottom:14px;">📄</div>
-                    <div style="font-size:35px;font-weight:800;color:#2d3a4a;">{{Escape(fileName)}}</div>
-                    <div style="font-size:27px;color:#9aa4af;margin-top:8px;">Invoice: {{Escape(item.InvoiceNumber)}}</div>
-                    <a href="#" style="display:inline-block;margin-top:22px;background:#e74c3c;color:#ffffff;text-decoration:none;padding:13px 30px;border-radius:6px;font-size:26px;font-weight:800;">DETAIL INVOICE</a>
+                  <td align="center" style="padding:28px 20px;">
+                    <div style="font-size:44px;line-height:1;margin-bottom:10px;">📄</div>
+                    <div style="font-size:18px;font-weight:800;color:#1f2937;">{{Escape(fileName)}}</div>
+                    <div style="font-size:14px;color:#9ca3af;margin-top:6px;">Invoice: {{Escape(item.InvoiceNumber)}}</div>
+                    <a href="#" style="display:inline-block;margin-top:16px;background:#e74c3c;color:#ffffff;text-decoration:none;padding:10px 24px;border-radius:6px;font-size:16px;font-weight:800;">DETAIL INVOICE</a>
                   </td>
                 </tr>
               </table>
 
-              <p style="margin:28px 0 0 0;text-align:center;font-size:30px;color:#9aa4af;font-style:italic;">*Harap lakukan pengecekan saldo pada Cash of Account sebelum melakukan eksekusi pembayaran.</p>
+              <p style="margin:22px 0 0 0;text-align:center;font-size:14px;color:#9ca3af;font-style:italic;">*Harap lakukan pengecekan saldo pada Cash of Account sebelum melakukan eksekusi pembayaran.</p>
             </td>
-          </tr>
-          <tr>
-            <td style="padding:18px 24px;border-top:1px solid #eceff3;text-align:center;font-size:24px;color:#a4acb6;">Dokumen ini dihasilkan secara otomatis oleh Smart Garment Financial System.</td>
           </tr>
         </table>
       </td>

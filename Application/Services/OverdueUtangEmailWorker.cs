@@ -157,7 +157,7 @@ public sealed class OverdueUtangEmailWorker : BackgroundService
                         ToEmail = to,
                         Subject = OverdueUtangEmailTemplate.BuildSubject(item),
                         HtmlBody = OverdueUtangEmailTemplate.BuildHtml(item),
-                        PlainTextBody = OverdueUtangEmailTemplate.BuildPlainText(item),
+                        PlainTextBody = null,
                     }, ct);
 
                     _logger.LogInformation(
