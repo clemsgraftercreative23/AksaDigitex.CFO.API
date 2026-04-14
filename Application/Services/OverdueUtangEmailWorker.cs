@@ -11,8 +11,6 @@ namespace MyBackend.Application.Services;
 
 public sealed class OverdueUtangEmailWorker : BackgroundService
 {
-    private static readonly HashSet<int> AllowedBuckets = [31, 61, 91];
-
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IOptions<OverdueEmailScheduleOptions> _scheduleOptions;
     private readonly ILogger<OverdueUtangEmailWorker> _logger;
@@ -104,6 +102,18 @@ public sealed class OverdueUtangEmailWorker : BackgroundService
             return;
         }
 
+        var reminderDays = schedule.ReminderDaysBeforeDue
+            .Where(x => x > 0)
+            .Distinct()
+            .OrderByDescending(x => x)
+            .ToList();
+
+        if (reminderDays.Count == 0)
+        {
+            _logger.LogWarning("[OverdueUtangEmailWorker] No reminder day configured. Set OverdueEmailSchedule:ReminderDaysBeforeDue.");
+            return;
+        }
+
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var notifications = new List<OverdueNotificationDto>();
 
@@ -112,13 +122,14 @@ public sealed class OverdueUtangEmailWorker : BackgroundService
             ct.ThrowIfCancellationRequested();
             try
             {
-                var companyNotifs = await OverdueNotificationComputation.ComputeUtangForCompany(
+                var companyNotifs = await OverdueNotificationComputation.ComputeUtangDueSoonForCompany(
                     companyKey,
                     today,
                     accurateService,
+                    reminderDays,
                     ct);
 
-                notifications.AddRange(companyNotifs.Where(x => AllowedBuckets.Contains(x.AgingBucket)));
+                notifications.AddRange(companyNotifs);
             }
             catch (OperationCanceledException)
             {
@@ -134,12 +145,12 @@ public sealed class OverdueUtangEmailWorker : BackgroundService
 
         if (notifications.Count == 0)
         {
-            _logger.LogInformation("[OverdueUtangEmailWorker] No utang overdue notifications found for 30/60/90+ days.");
+            _logger.LogInformation("[OverdueUtangEmailWorker] No utang reminder notifications matched configured H-minus days: {ReminderDays}.", string.Join(",", reminderDays));
             return;
         }
 
         notifications = notifications
-            .OrderByDescending(x => x.AgingBucket)
+            .OrderBy(x => x.DaysUntilDue ?? int.MaxValue)
             .ThenBy(x => x.EntityName)
             .ThenBy(x => x.InvoiceNumber)
             .ToList();
@@ -155,16 +166,16 @@ public sealed class OverdueUtangEmailWorker : BackgroundService
                     await emailService.SendAsync(new SendEmailRequest
                     {
                         ToEmail = to,
-                        Subject = OverdueUtangEmailTemplate.BuildSubject(item),
-                        HtmlBody = OverdueUtangEmailTemplate.BuildHtml(item),
-                        PlainTextBody = null,
+                        Subject = OverdueUtangEmailTemplate.BuildSubject(item, item.DaysUntilDue),
+                        HtmlBody = OverdueUtangEmailTemplate.BuildHtml(item, item.DaysUntilDue),
+                        PlainTextBody = OverdueUtangEmailTemplate.BuildPlainText(item, item.DaysUntilDue),
                     }, ct);
 
                     _logger.LogInformation(
-                        "[OverdueUtangEmailWorker] Sent overdue utang email to {Recipient} for invoice={Invoice} bucket={Bucket}",
+                        "[OverdueUtangEmailWorker] Sent due-soon utang email to {Recipient} for invoice={Invoice} hMinus={HMinus}",
                         to,
                         item.InvoiceNumber,
-                        item.AgingBucket);
+                        item.DaysUntilDue);
                 }
                 catch (Exception ex)
                 {

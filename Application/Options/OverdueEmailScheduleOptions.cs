@@ -9,4 +9,5 @@ public sealed class OverdueEmailScheduleOptions
     public int MinuteLocal { get; set; } = 0;
     public string TimeZoneId { get; set; } = "Asia/Jakarta";
     public List<string> Recipients { get; set; } = [];
+    public List<int> ReminderDaysBeforeDue { get; set; } = [1];
 }

@@ -24,6 +24,7 @@ public sealed record OverdueNotificationDto
     public string? CounterpartyName { get; init; }
     public string? DueDate { get; init; }
     public required int DaysPastDue { get; init; }
+    public int? DaysUntilDue { get; init; }
     /// <summary>The threshold that was crossed: 31, 61, or 91.</summary>
     public required int AgingBucket { get; init; }
     public required DateTime CreatedAt { get; init; }
@@ -112,6 +113,7 @@ public static class OverdueNotificationComputation
                         CounterpartyName = null,
                         DueDate = transDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                         DaysPastDue = days,
+                        DaysUntilDue = null,
                         AgingBucket = bucket.Value,
                         CreatedAt = DateTime.UtcNow,
                         Category = "alert",
@@ -198,6 +200,7 @@ public static class OverdueNotificationComputation
                         CounterpartyName = vendorName,
                         DueDate = dueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                         DaysPastDue = days,
+                        DaysUntilDue = null,
                         AgingBucket = bucket.Value,
                         CreatedAt = DateTime.UtcNow,
                         Category = "alert",
@@ -210,6 +213,194 @@ public static class OverdueNotificationComputation
             });
 
         return results.OrderByDescending(n => n.AgingBucket).ThenBy(n => n.EntityName).ToList();
+    }
+
+    /// <summary>
+    /// Compute utang reminders for invoices that will be due in the configured H-minus days.
+    /// Example: [1,2,3,5] means send reminders on H-1, H-2, H-3, and H-5.
+    /// </summary>
+    public static async Task<IReadOnlyList<OverdueNotificationDto>> ComputeUtangDueSoonForCompany(
+        string companyKey,
+        DateOnly asOfDate,
+        IAccurateService service,
+        IReadOnlyCollection<int> reminderDaysBeforeDue,
+        CancellationToken ct)
+    {
+        if (reminderDaysBeforeDue.Count == 0)
+            return [];
+
+        string listRaw;
+        try
+        {
+            listRaw = await service.GetPurchaseInvoiceListRaw(companyKey);
+        }
+        catch (Exception)
+        {
+            return [];
+        }
+
+        var ids = ParseIdsFromList(listRaw, MaxInvoiceDetails);
+        if (ids.Count == 0) return [];
+
+        var reminderSet = reminderDaysBeforeDue
+            .Where(x => x > 0)
+            .ToHashSet();
+        if (reminderSet.Count == 0) return [];
+
+        var vendorNameCache = new ConcurrentDictionary<long, string>();
+        var results = new ConcurrentBag<OverdueNotificationDto>();
+
+        await Parallel.ForEachAsync(
+            ids,
+            new ParallelOptions { MaxDegreeOfParallelism = MaxParallelism, CancellationToken = ct },
+            async (id, token) =>
+            {
+                try
+                {
+                    var raw = await service.GetPurchaseInvoiceDetailRaw(id, companyKey);
+                    if (!TryParsePurchaseInvoiceForNotification(raw, out var detail)) return;
+                    if (!IsBelumLunas(detail.StatusOutstandingRaw)) return;
+                    if (!TryParseDate(detail.DueDateRaw, out var dueDate)) return;
+
+                    var daysUntilDue = dueDate.DayNumber - asOfDate.DayNumber;
+                    if (!reminderSet.Contains(daysUntilDue)) return;
+
+                    var vendorName = detail.VendorName;
+                    if (detail.VendorId != null && string.IsNullOrWhiteSpace(vendorName))
+                    {
+                        vendorName = await ResolveVendorName(service, companyKey, detail.VendorId.Value, vendorNameCache);
+                    }
+                    if (string.IsNullOrWhiteSpace(vendorName)) vendorName = "-";
+
+                    var invoiceNumber = detail.InvoiceNumber ?? $"PI-{id}";
+                    var severity = daysUntilDue switch
+                    {
+                        1 => "danger",
+                        2 => "warning",
+                        _ => "success",
+                    };
+
+                    results.Add(new OverdueNotificationDto
+                    {
+                        Id = $"ap-due-soon-{invoiceNumber}-h{daysUntilDue}",
+                        Type = "utang",
+                        Severity = severity,
+                        Title = $"Utang Jatuh Tempo H-{daysUntilDue} - {companyKey}",
+                        Message = $"Invoice #{invoiceNumber} senilai {FormatRupiah(detail.PurchaseAmount)} jatuh tempo H-{daysUntilDue}. Segera eksekusi pembayaran.",
+                        InvoiceNumber = invoiceNumber,
+                        TotalAmount = detail.PurchaseAmount,
+                        EntityName = companyKey,
+                        CounterpartyName = vendorName,
+                        DueDate = dueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                        DaysPastDue = -daysUntilDue,
+                        DaysUntilDue = daysUntilDue,
+                        AgingBucket = -daysUntilDue,
+                        CreatedAt = DateTime.UtcNow,
+                        Category = "alert",
+                    });
+                }
+                catch
+                {
+                    // Skip individual invoice failures silently
+                }
+            });
+
+        return results
+            .OrderBy(x => x.DaysUntilDue ?? int.MaxValue)
+            .ThenBy(x => x.EntityName)
+            .ThenBy(x => x.InvoiceNumber)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Compute overdue utang notifications for invoices already past due by at least <paramref name="minimumDaysPastDue"/> days.
+    /// </summary>
+    public static async Task<IReadOnlyList<OverdueNotificationDto>> ComputeUtangOverdueForCompany(
+        string companyKey,
+        DateOnly asOfDate,
+        IAccurateService service,
+        int minimumDaysPastDue,
+        CancellationToken ct)
+    {
+        if (minimumDaysPastDue < 0)
+            minimumDaysPastDue = 0;
+
+        string listRaw;
+        try
+        {
+            listRaw = await service.GetPurchaseInvoiceListRaw(companyKey);
+        }
+        catch (Exception)
+        {
+            return [];
+        }
+
+        var ids = ParseIdsFromList(listRaw, MaxInvoiceDetails);
+        if (ids.Count == 0) return [];
+
+        var vendorNameCache = new ConcurrentDictionary<long, string>();
+        var results = new ConcurrentBag<OverdueNotificationDto>();
+
+        await Parallel.ForEachAsync(
+            ids,
+            new ParallelOptions { MaxDegreeOfParallelism = MaxParallelism, CancellationToken = ct },
+            async (id, token) =>
+            {
+                try
+                {
+                    var raw = await service.GetPurchaseInvoiceDetailRaw(id, companyKey);
+                    if (!TryParsePurchaseInvoiceForNotification(raw, out var detail)) return;
+                    if (!IsBelumLunas(detail.StatusOutstandingRaw)) return;
+                    if (!TryParseDate(detail.DueDateRaw, out var dueDate)) return;
+
+                    var daysPastDue = asOfDate.DayNumber - dueDate.DayNumber;
+                    if (daysPastDue < minimumDaysPastDue) return;
+
+                    var vendorName = detail.VendorName;
+                    if (detail.VendorId != null && string.IsNullOrWhiteSpace(vendorName))
+                    {
+                        vendorName = await ResolveVendorName(service, companyKey, detail.VendorId.Value, vendorNameCache);
+                    }
+                    if (string.IsNullOrWhiteSpace(vendorName)) vendorName = "-";
+
+                    var invoiceNumber = detail.InvoiceNumber ?? $"PI-{id}";
+                    var severity = daysPastDue switch
+                    {
+                        >= 90 => "danger",
+                        >= 60 => "warning",
+                        _ => "success",
+                    };
+
+                    results.Add(new OverdueNotificationDto
+                    {
+                        Id = $"ap-overdue-{invoiceNumber}-hplus{daysPastDue}",
+                        Type = "utang",
+                        Severity = severity,
+                        Title = $"Utang Overdue H+{daysPastDue} - {companyKey}",
+                        Message = $"Invoice #{invoiceNumber} senilai {FormatRupiah(detail.PurchaseAmount)} telah melewati jatuh tempo {daysPastDue} hari.",
+                        InvoiceNumber = invoiceNumber,
+                        TotalAmount = detail.PurchaseAmount,
+                        EntityName = companyKey,
+                        CounterpartyName = vendorName,
+                        DueDate = dueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                        DaysPastDue = daysPastDue,
+                        DaysUntilDue = null,
+                        AgingBucket = daysPastDue,
+                        CreatedAt = DateTime.UtcNow,
+                        Category = "alert",
+                    });
+                }
+                catch
+                {
+                    // Skip individual invoice failures silently
+                }
+            });
+
+        return results
+            .OrderByDescending(x => x.DaysPastDue)
+            .ThenBy(x => x.EntityName)
+            .ThenBy(x => x.InvoiceNumber)
+            .ToList();
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
