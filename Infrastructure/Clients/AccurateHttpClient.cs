@@ -129,6 +129,30 @@ public class AccurateHttpClient
     }
 
     /// <summary>
+    /// Profit/Loss report from Accurate. Returns raw JSON.
+    /// startDate and endDate in format dd/MM/yyyy (e.g. 01/01/2026).
+    /// </summary>
+    public async Task<string> GetProfitLossRaw(string startDate, string endDate, string? company = null)
+    {
+        var token = GetToken(company);
+        var signatureKey = _config["Accurate:SignatureKey"];
+        var host = GetHost(company);
+
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
+        var signature = GenerateSignature(signatureKey, timestamp);
+
+        var url = $"{host}/accurate/api/report/profit-loss.do?startDate={Uri.EscapeDataString(startDate)}&endDate={Uri.EscapeDataString(endDate)}";
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Add("Authorization", $"Bearer {token}");
+        request.Headers.Add("X-Api-Timestamp", timestamp);
+        request.Headers.Add("X-Api-Signature", signature);
+
+        var response = await _httpClient.SendAsync(request);
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    /// <summary>
     /// Neraca (Balance Sheet) report from Accurate. Returns raw JSON.
     /// asOfDate in format dd/MM/yyyy (e.g. 17/03/2026).
     /// </summary>

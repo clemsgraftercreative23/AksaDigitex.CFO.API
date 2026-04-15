@@ -11,6 +11,8 @@ public interface IAccurateService
     IReadOnlyList<string> GetCompanyNames();
     /// <summary>Laba Rugi (P&amp;L) report. fromDate/toDate in dd/MM/yyyy. Returns raw JSON from Accurate.</summary>
     Task<string> GetPlAccountAmountRaw(string fromDate, string toDate, string? company = null);
+    /// <summary>Profit/Loss report. startDate/endDate in dd/MM/yyyy. Returns raw JSON from Accurate.</summary>
+    Task<string> GetProfitLossRaw(string startDate, string endDate, string? company = null);
     /// <summary>Neraca (Balance Sheet) report. asOfDate in dd/MM/yyyy. Returns raw JSON from Accurate.</summary>
     Task<string> GetBsAccountAmountRaw(string asOfDate, string? company = null);
     Task<string> GetOtherDepositListRaw(string? company = null);

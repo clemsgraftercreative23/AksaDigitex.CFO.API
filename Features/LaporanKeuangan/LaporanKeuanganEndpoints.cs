@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Security.Claims;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Caching.Memory;
 using MyBackend.Application.Services;
@@ -51,7 +52,326 @@ public static class LaporanKeuanganEndpoints
         => $"laporan:laba-rugi:{fromDate}:{toDate}:" + string.Join("|", sortedKeys);
 
     private static string BuildNeracaCacheKey(IReadOnlyList<string> sortedKeys, string asOfDate)
-        => $"laporan:neraca:{asOfDate}:" + string.Join("|", sortedKeys);
+        => $"laporan:neraca:v4:{asOfDate}:" + string.Join("|", sortedKeys);
+
+    private static (string StartDate, string EndDate) BuildProfitLossPeriod(string asOfDate)
+    {
+        var parsed = DateOnly.ParseExact(asOfDate, "dd/MM/yyyy", CultureInfo.InvariantCulture);
+        var start = new DateOnly(parsed.Year, 1, 1);
+        return (
+            start.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture),
+            parsed.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture));
+    }
+
+    private static bool TryGetProfitLostBalance(JsonNode? node, out decimal balance)
+    {
+        balance = 0m;
+
+        static bool TryParseDecimalLoose(string? raw, out decimal parsed)
+        {
+            parsed = 0m;
+            if (string.IsNullOrWhiteSpace(raw))
+                return false;
+
+            var text = raw.Trim();
+            if (decimal.TryParse(text, NumberStyles.Any, CultureInfo.InvariantCulture, out parsed))
+                return true;
+            if (decimal.TryParse(text, NumberStyles.Any, new CultureInfo("id-ID"), out parsed))
+                return true;
+
+            text = text.Replace("Rp", "", StringComparison.OrdinalIgnoreCase)
+                       .Replace(" ", "")
+                       .Replace(".", "")
+                       .Replace(",", ".");
+            return decimal.TryParse(text, NumberStyles.Any, CultureInfo.InvariantCulture, out parsed);
+        }
+
+        static bool TryGetPropertyIgnoreCase(JsonObject obj, string propertyName, out JsonNode? value)
+        {
+            foreach (var kv in obj)
+            {
+                if (string.Equals(kv.Key, propertyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = kv.Value;
+                    return true;
+                }
+            }
+
+            value = null;
+            return false;
+        }
+
+        static bool TryReadBalanceFromObject(JsonObject obj, out decimal value)
+        {
+            value = 0m;
+            if (!TryGetPropertyIgnoreCase(obj, "balance", out var b) || b is null)
+                return false;
+
+            var txt = b.ToJsonString().Trim('"');
+            return TryParseDecimalLoose(txt, out value);
+        }
+
+        static bool TryReadBalanceFromObjectByKeys(JsonObject obj, string[] keys, out decimal value)
+        {
+            value = 0m;
+            foreach (var key in keys)
+            {
+                if (!TryGetPropertyIgnoreCase(obj, key, out var nodeValue) || nodeValue is null)
+                    continue;
+
+                var txt = nodeValue.ToJsonString().Trim('"');
+                if (TryParseDecimalLoose(txt, out value))
+                    return true;
+            }
+
+            return false;
+        }
+
+        static bool TryGetDescription(JsonObject obj, out string description)
+        {
+            description = string.Empty;
+            foreach (var key in new[] { "profitLoss.description", "profitLost.description", "description" })
+            {
+                if (!TryGetPropertyIgnoreCase(obj, key, out var nodeValue) || nodeValue is null)
+                    continue;
+
+                description = nodeValue.ToJsonString().Trim('"').Trim();
+                if (description.Length > 0)
+                    return true;
+            }
+
+            return false;
+        }
+
+        static bool TryReadProfitBalanceFields(JsonObject obj, out decimal value)
+            => TryReadBalanceFromObjectByKeys(
+                obj,
+            new[] { "profitLoss.balance" },
+                out value);
+
+        static bool TryGetBoolByKeys(JsonObject obj, string[] keys, out bool value)
+        {
+            value = false;
+            foreach (var key in keys)
+            {
+                if (!TryGetPropertyIgnoreCase(obj, key, out var nodeValue) || nodeValue is null)
+                    continue;
+
+                var raw = nodeValue.ToJsonString().Trim('"').Trim();
+                if (bool.TryParse(raw, out var parsed))
+                {
+                    value = parsed;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        static bool TryGetIntByKeys(JsonObject obj, string[] keys, out int value)
+        {
+            value = 0;
+            foreach (var key in keys)
+            {
+                if (!TryGetPropertyIgnoreCase(obj, key, out var nodeValue) || nodeValue is null)
+                    continue;
+
+                var raw = nodeValue.ToJsonString().Trim('"').Trim();
+                if (int.TryParse(raw, NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed))
+                {
+                    value = parsed;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        static bool TryFindBalanceRecursive(JsonNode? current, out decimal value)
+        {
+            value = 0m;
+            if (current is JsonObject obj)
+            {
+                // Preferred containers from Accurate profit-loss payload.
+                foreach (var name in new[] { "profitLost", "profitLoss", "labaRugi", "netProfit", "netIncome" })
+                {
+                    if (TryGetPropertyIgnoreCase(obj, name, out var c) && c is JsonObject container)
+                    {
+                        if (TryReadBalanceFromObject(container, out value))
+                            return true;
+                    }
+                }
+
+                if (TryReadProfitBalanceFields(obj, out value))
+                    return true;
+
+                if (TryReadBalanceFromObject(obj, out value))
+                    return true;
+
+                foreach (var kv in obj)
+                {
+                    if (TryFindBalanceRecursive(kv.Value, out value))
+                        return true;
+                }
+            }
+            else if (current is JsonArray arr)
+            {
+                // Preferred for /report/profit-loss.do: find row with description "LABA BERSIH".
+                decimal bestValue = 0m;
+                var found = false;
+                var bestIsLastRow = false;
+                var bestSeq = int.MinValue;
+
+                foreach (var item in arr)
+                {
+                    if (item is not JsonObject row)
+                        continue;
+
+                    if (!TryGetDescription(row, out var desc))
+                        continue;
+
+                    if (!string.Equals(desc, "LABA BERSIH", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    if (!TryReadProfitBalanceFields(row, out var rowValue))
+                        continue;
+
+                    var isLastRow =
+                        TryGetBoolByKeys(row, new[] { "profitLoss.isLastRow", "isLastRow" }, out var parsedIsLast)
+                        && parsedIsLast;
+                    var seq =
+                        TryGetIntByKeys(row, new[] { "profitLoss.seq", "seq" }, out var parsedSeq)
+                        ? parsedSeq
+                        : int.MinValue;
+
+                    var shouldReplace = !found
+                        || (!bestIsLastRow && isLastRow)
+                        || (bestIsLastRow == isLastRow && seq > bestSeq);
+
+                    if (!shouldReplace)
+                        continue;
+
+                    found = true;
+                    bestValue = rowValue;
+                    bestIsLastRow = isLastRow;
+                    bestSeq = seq;
+                }
+
+                if (found)
+                {
+                    value = bestValue;
+                    return true;
+                }
+
+                // For tabular payloads, enforce strict rule:
+                // only use profitLoss.balance from row with description "LABA BERSIH".
+                return false;
+            }
+
+            return false;
+        }
+
+        return TryFindBalanceRecursive(node, out balance);
+    }
+
+    private static decimal ReadLabaBersihFromPlAccountAmountOrZero(string rawPlJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(rawPlJson);
+            if (!doc.RootElement.TryGetProperty("d", out var d) || d.ValueKind != JsonValueKind.Array)
+                return 0m;
+
+            var rows = ParseLabaRugiRows(d);
+            return CalculateLabaBersihFromParentRows(rows);
+        }
+        catch
+        {
+            return 0m;
+        }
+    }
+
+    private static async Task<decimal> ResolveLabaTahunIniAsync(
+        IAccurateService service,
+        string profitStartDate,
+        string profitEndDate,
+        string? company)
+    {
+        // Strict source: /accurate/api/report/profit-loss.do -> d[] row where
+        // profitLoss.description == "LABA BERSIH", then take profitLoss.balance.
+        var rawProfitLoss = await service.GetProfitLossRaw(profitStartDate, profitEndDate, company);
+        return TryReadProfitLostBalance(rawProfitLoss, out var balance) ? balance : 0m;
+    }
+
+    private static bool TryReadProfitLostBalance(string rawProfitLossJson, out decimal balance)
+    {
+        balance = 0m;
+        try
+        {
+            var node = JsonNode.Parse(rawProfitLossJson);
+            return TryGetProfitLostBalance(node, out balance);
+        }
+        catch
+        {
+            // Keep neraca endpoint resilient when profit-loss payload is malformed/intermittent.
+        }
+
+        return false;
+    }
+
+    private static bool TryAppendEquityRow(JsonNode? node, JsonObject equityRow)
+    {
+        if (node is JsonArray array)
+        {
+            array.Add(equityRow);
+            return true;
+        }
+
+        if (node is JsonObject obj)
+        {
+            foreach (var key in new[] { "rows", "list", "data" })
+            {
+                if (obj[key] is JsonArray nestedArray)
+                {
+                    nestedArray.Add(equityRow);
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static string AddLabaTahunIniToNeraca(string rawJson, decimal labaTahunIni)
+    {
+        JsonObject? root;
+        try
+        {
+            root = JsonNode.Parse(rawJson) as JsonObject;
+        }
+        catch
+        {
+            return rawJson;
+        }
+
+        if (root is null)
+            return rawJson;
+
+        var equityRow = new JsonObject
+        {
+            ["accountNo"] = "3999",
+            ["accountName"] = "Laba Tahun Ini",
+            ["accountType"] = "EQUITY",
+            ["amount"] = labaTahunIni,
+            ["isParent"] = false,
+            ["lvl"] = 1,
+        };
+
+        if (TryAppendEquityRow(root["d"], equityRow))
+            return root.ToJsonString();
+
+        return rawJson;
+    }
 
     private static string BuildArusKasCacheKey(IReadOnlyList<string> sortedKeys, string fromDate, string toDate)
         => $"laporan:arus-kas:v3:{fromDate}:{toDate}:" + string.Join("|", sortedKeys);
@@ -473,6 +793,11 @@ public static class LaporanKeuanganEndpoints
             if (!accessResult.Success)
                 return Results.Json(new { error = accessResult.Error }, statusCode: accessResult.StatusCode);
 
+            if (!DateOnly.TryParseExact(asOfDate, "dd/MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+                return Results.Json(new { s = false, d = "Invalid asOfDate; use dd/MM/yyyy" }, statusCode: 400);
+
+            var (profitStartDate, profitEndDate) = BuildProfitLossPeriod(asOfDate);
+
             var keys = accessResult.AccurateCompanyKeys;
             var sortedKeys = keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
             var cacheKey = BuildNeracaCacheKey(sortedKeys, asOfDate);
@@ -500,7 +825,14 @@ public static class LaporanKeuanganEndpoints
                         var companiesList = new List<object>();
                         foreach (var companyName in sortedKeys)
                         {
+                            var labaTahunIni = await ResolveLabaTahunIniAsync(
+                                service,
+                                profitStartDate,
+                                profitEndDate,
+                                companyName);
+
                             var rawJson = await service.GetBsAccountAmountRaw(asOfDate, companyName);
+                            rawJson = AddLabaTahunIniToNeraca(rawJson, labaTahunIni);
                             using var doc = JsonDocument.Parse(rawJson);
                             var d = doc.RootElement.TryGetProperty("d", out var prop)
                                 ? prop.Clone()
@@ -513,7 +845,14 @@ public static class LaporanKeuanganEndpoints
                     }
 
                     var singleCompany = keys.Count == 1 ? keys[0] : null;
+                    var labaTahunIniSingle = await ResolveLabaTahunIniAsync(
+                        service,
+                        profitStartDate,
+                        profitEndDate,
+                        singleCompany);
+
                     var json = await service.GetBsAccountAmountRaw(asOfDate, singleCompany);
+                    json = AddLabaTahunIniToNeraca(json, labaTahunIniSingle);
                     cache.Set(cacheKey, new NeracaCachedResult(IsMulti: false, Companies: null, SingleJson: json), ReportCacheOptions());
                     return Results.Content(json, "application/json");
                 }
