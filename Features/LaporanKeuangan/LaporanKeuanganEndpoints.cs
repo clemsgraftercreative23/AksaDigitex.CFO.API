@@ -248,7 +248,7 @@ public static class LaporanKeuanganEndpoints
                         var safePendapatan = totalPendapatan == 0 ? 1 : totalPendapatan;
                         var hpp = GetParentAmount(rows, "5100");
                         var labaKotor = totalPendapatan - hpp;
-                        var bebanOp = GetParentAmount(rows, "6100") + GetParentAmount(rows, "6200");
+                        var bebanOp = GetParentAmount(rows, "6100") + GetParentAmount(rows, "6200") + GetParentAmount(rows, "6300");
                         var labaUsaha = labaKotor - bebanOp;
                         var pendLain = GetParentAmount(rows, "7100");
                         var bebanLain = GetParentAmount(rows, "8100") + GetParentAmount(rows, "8200") + GetParentAmount(rows, "8300");
@@ -825,7 +825,8 @@ public static class LaporanKeuanganEndpoints
                                     beban =
                                         GetParentAmount(rows, "5100")
                                         + GetParentAmount(rows, "6100")
-                                        + GetParentAmount(rows, "6200");
+                                        + GetParentAmount(rows, "6200")
+                                        + GetParentAmount(rows, "6300");
                                     pendapatanLain = GetParentAmount(rows, "7100");
                                     bebanLain =
                                         GetParentAmount(rows, "8100")
