@@ -14,4 +14,12 @@ public class EmailOptions
     public string Username { get; set; } = string.Empty;
     public string Password { get; set; } = string.Empty;
     public int TimeoutSeconds { get; set; } = 30;
+
+    public bool EnableHttpFallback { get; set; } = false;
+    public string HttpFallbackProvider { get; set; } = string.Empty;
+    public string HttpFallbackApiUrl { get; set; } = string.Empty;
+    public string HttpFallbackApiKey { get; set; } = string.Empty;
+    public string HttpFallbackFromEmail { get; set; } = string.Empty;
+    public string HttpFallbackFromName { get; set; } = string.Empty;
+    public int HttpFallbackTimeoutSeconds { get; set; } = 15;
 }
